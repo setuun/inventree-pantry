@@ -1,0 +1,15 @@
+# inventree-pantry: daily expiry summary. Install to /etc/systemd/system/ together with the
+# timer, put the script at /usr/local/bin/inventree-pantry-expiry-check, the config at
+# /etc/inventree-pantry/pantry.json and the secrets at /etc/inventree-pantry/expiry-check.env
+# (mode 0600, see expiry-check.env.example). Then: systemctl enable --now inventree-pantry-expiry.timer
+[Unit]
+Description=inventree-pantry: report stock that is expired or expiring soon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/inventree-pantry/expiry-check.env
+Environment=PANTRY_CONFIG=/etc/inventree-pantry/pantry.json
+ExecStart=/usr/local/bin/inventree-pantry-expiry-check
+DynamicUser=yes

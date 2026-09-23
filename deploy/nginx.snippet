@@ -1,0 +1,8 @@
+# inventree-pantry behind nginx instead of InvenTree's own Caddy.
+# Inside the `server` block that already proxies InvenTree, BEFORE the catch-all `location /`.
+# The alias must point at the directory tools/install.sh filled (<data-dir>/vorrat/).
+location = /vorrat { return 301 /vorrat/; }
+location /vorrat/ {
+    alias /srv/inventree-data/vorrat/;
+    try_files $uri /vorrat/index.html;
+}

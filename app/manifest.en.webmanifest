@@ -1,0 +1,19 @@
+{
+  "name": "Pantry",
+  "short_name": "Pantry",
+  "description": "Book in, use up, count — the household side of InvenTree.",
+  "lang": "en",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#2e3440",
+  "theme_color": "#2e3440",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

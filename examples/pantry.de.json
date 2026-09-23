@@ -1,0 +1,251 @@
+{
+  "language": "de",
+  "pack_parameter": "Inhalt",
+  "pack_parameter_description": "Menge in einer Packung, in der Einheit des Artikels",
+  "app": {
+    "book_location": "Keller/Krisenvorrat"
+  },
+  "expiry": {
+    "warn_days": 7,
+    "lead_fraction": 0.2,
+    "lead_min_days": 5,
+    "lead_max_days": 90
+  },
+  "locations": [
+    {
+      "name": "Küche",
+      "description": "Speisekammer, Kühl- und Gefrierschrank"
+    },
+    {
+      "name": "Keller",
+      "description": "Vorratslager und Sanierungsmaterial"
+    },
+    {
+      "name": "Garage",
+      "description": "Werkzeug und Baumaterial"
+    },
+    {
+      "name": "Schuppen",
+      "description": "Garten- und Außenmaterial"
+    },
+    {
+      "name": "Krisenvorrat",
+      "parent": "Keller",
+      "description": "Langlebiger Notvorrat — nur dieser Ort wird gepflegt"
+    }
+  ],
+  "categories": [
+    {
+      "name": "Lebensmittel",
+      "description": "Vorräte mit Mindesthaltbarkeitsdatum",
+      "structural": true
+    },
+    {
+      "name": "Getreide & Beilagen",
+      "parent": "Lebensmittel",
+      "description": "Brot, Nudeln, Reis, Mehl, Kartoffeln, Flocken",
+      "default_location": "Küche",
+      "expiry_days": 730
+    },
+    {
+      "name": "Gemüse & Hülsenfrüchte",
+      "parent": "Lebensmittel",
+      "description": "Konserven und Gläser, Bohnen, Linsen, Erbsen",
+      "default_location": "Küche",
+      "expiry_days": 1095
+    },
+    {
+      "name": "Obst & Nüsse",
+      "parent": "Lebensmittel",
+      "description": "Konserven, Trockenobst, Nüsse",
+      "default_location": "Küche",
+      "expiry_days": 730
+    },
+    {
+      "name": "Milchprodukte",
+      "parent": "Lebensmittel",
+      "description": "H-Milch, Hartkäse, Kondensmilch, Milchpulver",
+      "default_location": "Küche",
+      "expiry_days": 180
+    },
+    {
+      "name": "Fisch, Fleisch & Eier",
+      "parent": "Lebensmittel",
+      "description": "Konserven, Trockenwurst, Volleipulver",
+      "default_location": "Küche",
+      "expiry_days": 1095
+    },
+    {
+      "name": "Fette & Öle",
+      "parent": "Lebensmittel",
+      "description": "Öl, Butterschmalz, Margarine",
+      "default_location": "Küche",
+      "expiry_days": 365
+    },
+    {
+      "name": "Getränke",
+      "parent": "Lebensmittel",
+      "description": "Wasser, Säfte, Kaffee, Tee",
+      "default_location": "Keller",
+      "expiry_days": 730
+    },
+    {
+      "name": "Sonstige Lebensmittel",
+      "parent": "Lebensmittel",
+      "description": "Zucker, Salz, Gewürze, Fertiggerichte, Süßes",
+      "default_location": "Küche",
+      "expiry_days": 730
+    },
+    {
+      "name": "Haushalt & Hygiene",
+      "description": "Seife, Waschmittel, Toilettenpapier, Müllbeutel",
+      "default_location": "Keller",
+      "expiry_days": 0
+    },
+    {
+      "name": "Medizin & Erste Hilfe",
+      "description": "Hausapotheke, Verbandmaterial, Medikamente",
+      "default_location": "Keller",
+      "default_keywords": "krisenvorrat",
+      "expiry_days": 1095
+    },
+    {
+      "name": "Licht & Energie",
+      "description": "Taschenlampen, Batterien, Powerbanks, Kocher, Brennstoff",
+      "default_location": "Krisenvorrat",
+      "default_keywords": "krisenvorrat",
+      "expiry_days": 1825
+    },
+    {
+      "name": "Notfallausrüstung",
+      "description": "Wasserkanister, Kocher, Filter, Melder — Ausrüstung, kein Verbrauch",
+      "default_location": "Krisenvorrat",
+      "default_keywords": "krisenvorrat",
+      "expiry_days": 0
+    },
+    {
+      "name": "Sanierungsmaterial",
+      "description": "Material und Werkzeug für die Haussanierung",
+      "default_location": "Garage",
+      "expiry_days": 0
+    },
+    {
+      "name": "Sonstiges",
+      "description": "Was in keine der Gruppen passt",
+      "expiry_days": 0
+    }
+  ],
+  "openfoodfacts": {
+    "contact": "you@example.org",
+    "fallback_location": "Küche",
+    "keywords": [],
+    "image_timeout": 20,
+    "image_max_kb": 2048,
+    "label_keywords": {
+      "organic": "bio",
+      "eu-organic": "bio",
+      "gluten-free": "glutenfrei",
+      "no-gluten": "glutenfrei",
+      "lactose-free": "laktosefrei",
+      "vegan": "vegan",
+      "vegetarian": "vegetarisch",
+      "fair-trade": "fairtrade"
+    },
+    "category_map": [
+      {
+        "category": "Fette & Öle",
+        "tokens": [
+          "oils",
+          "fats",
+          "butters",
+          "margarine"
+        ]
+      },
+      {
+        "category": "Fisch, Fleisch & Eier",
+        "tokens": [
+          "fishes",
+          "seafood",
+          "meats",
+          "poultry",
+          "hams",
+          "sausages",
+          "eggs"
+        ]
+      },
+      {
+        "category": "Milchprodukte",
+        "tokens": [
+          "dairies",
+          "milks",
+          "cheeses",
+          "yogurts",
+          "creams"
+        ]
+      },
+      {
+        "category": "Gemüse & Hülsenfrüchte",
+        "tokens": [
+          "vegetables",
+          "legumes",
+          "pulses",
+          "beans",
+          "lentils",
+          "peas",
+          "tomatoes"
+        ]
+      },
+      {
+        "category": "Obst & Nüsse",
+        "tokens": [
+          "fruits",
+          "nuts",
+          "dried-fruits",
+          "compotes",
+          "seeds"
+        ]
+      },
+      {
+        "category": "Getreide & Beilagen",
+        "tokens": [
+          "cereals",
+          "pastas",
+          "rice",
+          "breads",
+          "flours",
+          "potatoes",
+          "couscous",
+          "noodles",
+          "groats"
+        ]
+      },
+      {
+        "category": "Getränke",
+        "tokens": [
+          "beverages",
+          "waters",
+          "juices",
+          "sodas",
+          "coffees",
+          "teas"
+        ]
+      },
+      {
+        "category": "Sonstige Lebensmittel",
+        "tokens": [
+          "sugars",
+          "salts",
+          "spices",
+          "condiments",
+          "sauces",
+          "snacks",
+          "chocolates",
+          "honeys",
+          "jams",
+          "desserts",
+          "canned-foods"
+        ]
+      }
+    ]
+  }
+}

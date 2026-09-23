@@ -1,0 +1,251 @@
+{
+  "language": "ru",
+  "pack_parameter": "Содержимое упаковки",
+  "pack_parameter_description": "Количество в одной упаковке, в единицах товара",
+  "app": {
+    "book_location": "Подвал/Аварийный запас"
+  },
+  "expiry": {
+    "warn_days": 7,
+    "lead_fraction": 0.2,
+    "lead_min_days": 5,
+    "lead_max_days": 90
+  },
+  "locations": [
+    {
+      "name": "Кухня",
+      "description": "Кладовая, холодильник и морозилка"
+    },
+    {
+      "name": "Подвал",
+      "description": "Кладовая и ремонтные материалы"
+    },
+    {
+      "name": "Гараж",
+      "description": "Инструменты и стройматериалы"
+    },
+    {
+      "name": "Сарай",
+      "description": "Садовый и уличный инвентарь"
+    },
+    {
+      "name": "Аварийный запас",
+      "parent": "Подвал",
+      "description": "Долгохранящийся аварийный запас — только это место поддерживается в актуальном виде"
+    }
+  ],
+  "categories": [
+    {
+      "name": "Продукты",
+      "description": "Запасы со сроком годности",
+      "structural": true
+    },
+    {
+      "name": "Крупы и гарниры",
+      "parent": "Продукты",
+      "description": "Хлеб, макароны, рис, мука, картофель, хлопья",
+      "default_location": "Кухня",
+      "expiry_days": 730
+    },
+    {
+      "name": "Овощи и бобовые",
+      "parent": "Продукты",
+      "description": "Консервы и банки, фасоль, чечевица, горох",
+      "default_location": "Кухня",
+      "expiry_days": 1095
+    },
+    {
+      "name": "Фрукты и орехи",
+      "parent": "Продукты",
+      "description": "Консервы, сухофрукты, орехи",
+      "default_location": "Кухня",
+      "expiry_days": 730
+    },
+    {
+      "name": "Молочные продукты",
+      "parent": "Продукты",
+      "description": "Молоко длительного хранения, твёрдый сыр, сгущёнка, сухое молоко",
+      "default_location": "Кухня",
+      "expiry_days": 180
+    },
+    {
+      "name": "Рыба, мясо и яйца",
+      "parent": "Продукты",
+      "description": "Консервы, сыровяленая колбаса, яичный порошок",
+      "default_location": "Кухня",
+      "expiry_days": 1095
+    },
+    {
+      "name": "Жиры и масла",
+      "parent": "Продукты",
+      "description": "Масло, топлёное масло, маргарин",
+      "default_location": "Кухня",
+      "expiry_days": 365
+    },
+    {
+      "name": "Напитки",
+      "parent": "Продукты",
+      "description": "Вода, соки, кофе, чай",
+      "default_location": "Подвал",
+      "expiry_days": 730
+    },
+    {
+      "name": "Прочие продукты",
+      "parent": "Продукты",
+      "description": "Сахар, соль, специи, готовые блюда, сладости",
+      "default_location": "Кухня",
+      "expiry_days": 730
+    },
+    {
+      "name": "Хозяйство и гигиена",
+      "description": "Мыло, стиральный порошок, туалетная бумага, мешки для мусора",
+      "default_location": "Подвал",
+      "expiry_days": 0
+    },
+    {
+      "name": "Лекарства и первая помощь",
+      "description": "Домашняя аптечка, перевязочные материалы, лекарства",
+      "default_location": "Подвал",
+      "default_keywords": "аварийный",
+      "expiry_days": 1095
+    },
+    {
+      "name": "Свет и энергия",
+      "description": "Фонари, батарейки, пауэрбанки, плитки, топливо",
+      "default_location": "Аварийный запас",
+      "default_keywords": "аварийный",
+      "expiry_days": 1825
+    },
+    {
+      "name": "Аварийное снаряжение",
+      "description": "Канистры для воды, плитки, фильтры, датчики — снаряжение, не расходники",
+      "default_location": "Аварийный запас",
+      "default_keywords": "аварийный",
+      "expiry_days": 0
+    },
+    {
+      "name": "Ремонтные материалы",
+      "description": "Материалы и инструменты для ремонта дома",
+      "default_location": "Гараж",
+      "expiry_days": 0
+    },
+    {
+      "name": "Прочее",
+      "description": "То, что не подходит ни к одной группе",
+      "expiry_days": 0
+    }
+  ],
+  "openfoodfacts": {
+    "contact": "you@example.org",
+    "fallback_location": "Кухня",
+    "keywords": [],
+    "image_timeout": 20,
+    "image_max_kb": 2048,
+    "label_keywords": {
+      "organic": "био",
+      "eu-organic": "био",
+      "gluten-free": "без глютена",
+      "no-gluten": "без глютена",
+      "lactose-free": "без лактозы",
+      "vegan": "веган",
+      "vegetarian": "вегетарианское",
+      "fair-trade": "фэйртрейд"
+    },
+    "category_map": [
+      {
+        "category": "Жиры и масла",
+        "tokens": [
+          "oils",
+          "fats",
+          "butters",
+          "margarine"
+        ]
+      },
+      {
+        "category": "Рыба, мясо и яйца",
+        "tokens": [
+          "fishes",
+          "seafood",
+          "meats",
+          "poultry",
+          "hams",
+          "sausages",
+          "eggs"
+        ]
+      },
+      {
+        "category": "Молочные продукты",
+        "tokens": [
+          "dairies",
+          "milks",
+          "cheeses",
+          "yogurts",
+          "creams"
+        ]
+      },
+      {
+        "category": "Овощи и бобовые",
+        "tokens": [
+          "vegetables",
+          "legumes",
+          "pulses",
+          "beans",
+          "lentils",
+          "peas",
+          "tomatoes"
+        ]
+      },
+      {
+        "category": "Фрукты и орехи",
+        "tokens": [
+          "fruits",
+          "nuts",
+          "dried-fruits",
+          "compotes",
+          "seeds"
+        ]
+      },
+      {
+        "category": "Крупы и гарниры",
+        "tokens": [
+          "cereals",
+          "pastas",
+          "rice",
+          "breads",
+          "flours",
+          "potatoes",
+          "couscous",
+          "noodles",
+          "groats"
+        ]
+      },
+      {
+        "category": "Напитки",
+        "tokens": [
+          "beverages",
+          "waters",
+          "juices",
+          "sodas",
+          "coffees",
+          "teas"
+        ]
+      },
+      {
+        "category": "Прочие продукты",
+        "tokens": [
+          "sugars",
+          "salts",
+          "spices",
+          "condiments",
+          "sauces",
+          "snacks",
+          "chocolates",
+          "honeys",
+          "jams",
+          "desserts",
+          "canned-foods"
+        ]
+      }
+    ]
+  }
+}

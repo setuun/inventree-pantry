@@ -1,0 +1,19 @@
+{
+  "name": "储备",
+  "short_name": "储备",
+  "description": "入库、出库、清点——InvenTree 的家庭用法。",
+  "lang": "zh",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#2e3440",
+  "theme_color": "#2e3440",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

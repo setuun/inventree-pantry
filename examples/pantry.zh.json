@@ -1,0 +1,251 @@
+{
+  "language": "zh",
+  "pack_parameter": "每包含量",
+  "pack_parameter_description": "一包中的数量，以物品的单位计",
+  "app": {
+    "book_location": "地下室/应急储备"
+  },
+  "expiry": {
+    "warn_days": 7,
+    "lead_fraction": 0.2,
+    "lead_min_days": 5,
+    "lead_max_days": 90
+  },
+  "locations": [
+    {
+      "name": "厨房",
+      "description": "食品柜、冰箱和冰柜"
+    },
+    {
+      "name": "地下室",
+      "description": "储藏室和装修材料"
+    },
+    {
+      "name": "车库",
+      "description": "工具和建材"
+    },
+    {
+      "name": "棚屋",
+      "description": "园艺和户外用品"
+    },
+    {
+      "name": "应急储备",
+      "parent": "地下室",
+      "description": "长期保存的应急储备——只有这里需要保持更新"
+    }
+  ],
+  "categories": [
+    {
+      "name": "食品",
+      "description": "有保质期的储备",
+      "structural": true
+    },
+    {
+      "name": "谷物与主食",
+      "parent": "食品",
+      "description": "面包、面条、米、面粉、土豆、燕麦",
+      "default_location": "厨房",
+      "expiry_days": 730
+    },
+    {
+      "name": "蔬菜与豆类",
+      "parent": "食品",
+      "description": "罐头和瓶装、豆子、扁豆、豌豆",
+      "default_location": "厨房",
+      "expiry_days": 1095
+    },
+    {
+      "name": "水果与坚果",
+      "parent": "食品",
+      "description": "罐头、果干、坚果",
+      "default_location": "厨房",
+      "expiry_days": 730
+    },
+    {
+      "name": "乳制品",
+      "parent": "食品",
+      "description": "常温奶、硬质奶酪、炼乳、奶粉",
+      "default_location": "厨房",
+      "expiry_days": 180
+    },
+    {
+      "name": "鱼、肉与蛋",
+      "parent": "食品",
+      "description": "罐头、风干香肠、全蛋粉",
+      "default_location": "厨房",
+      "expiry_days": 1095
+    },
+    {
+      "name": "油脂",
+      "parent": "食品",
+      "description": "食用油、澄清黄油、人造黄油",
+      "default_location": "厨房",
+      "expiry_days": 365
+    },
+    {
+      "name": "饮料",
+      "parent": "食品",
+      "description": "水、果汁、咖啡、茶",
+      "default_location": "地下室",
+      "expiry_days": 730
+    },
+    {
+      "name": "其他食品",
+      "parent": "食品",
+      "description": "糖、盐、调料、方便食品、甜食",
+      "default_location": "厨房",
+      "expiry_days": 730
+    },
+    {
+      "name": "家居与卫生",
+      "description": "肥皂、洗衣剂、卫生纸、垃圾袋",
+      "default_location": "地下室",
+      "expiry_days": 0
+    },
+    {
+      "name": "药品与急救",
+      "description": "家庭药箱、敷料、药品",
+      "default_location": "地下室",
+      "default_keywords": "应急",
+      "expiry_days": 1095
+    },
+    {
+      "name": "照明与能源",
+      "description": "手电筒、电池、充电宝、炉具、燃料",
+      "default_location": "应急储备",
+      "default_keywords": "应急",
+      "expiry_days": 1825
+    },
+    {
+      "name": "应急装备",
+      "description": "水桶、炉具、滤水器、报警器——装备，不是消耗品",
+      "default_location": "应急储备",
+      "default_keywords": "应急",
+      "expiry_days": 0
+    },
+    {
+      "name": "装修材料",
+      "description": "房屋装修用的材料和工具",
+      "default_location": "车库",
+      "expiry_days": 0
+    },
+    {
+      "name": "其他",
+      "description": "不属于任何分组的物品",
+      "expiry_days": 0
+    }
+  ],
+  "openfoodfacts": {
+    "contact": "you@example.org",
+    "fallback_location": "厨房",
+    "keywords": [],
+    "image_timeout": 20,
+    "image_max_kb": 2048,
+    "label_keywords": {
+      "organic": "有机",
+      "eu-organic": "有机",
+      "gluten-free": "无麸质",
+      "no-gluten": "无麸质",
+      "lactose-free": "无乳糖",
+      "vegan": "纯素",
+      "vegetarian": "素食",
+      "fair-trade": "公平贸易"
+    },
+    "category_map": [
+      {
+        "category": "油脂",
+        "tokens": [
+          "oils",
+          "fats",
+          "butters",
+          "margarine"
+        ]
+      },
+      {
+        "category": "鱼、肉与蛋",
+        "tokens": [
+          "fishes",
+          "seafood",
+          "meats",
+          "poultry",
+          "hams",
+          "sausages",
+          "eggs"
+        ]
+      },
+      {
+        "category": "乳制品",
+        "tokens": [
+          "dairies",
+          "milks",
+          "cheeses",
+          "yogurts",
+          "creams"
+        ]
+      },
+      {
+        "category": "蔬菜与豆类",
+        "tokens": [
+          "vegetables",
+          "legumes",
+          "pulses",
+          "beans",
+          "lentils",
+          "peas",
+          "tomatoes"
+        ]
+      },
+      {
+        "category": "水果与坚果",
+        "tokens": [
+          "fruits",
+          "nuts",
+          "dried-fruits",
+          "compotes",
+          "seeds"
+        ]
+      },
+      {
+        "category": "谷物与主食",
+        "tokens": [
+          "cereals",
+          "pastas",
+          "rice",
+          "breads",
+          "flours",
+          "potatoes",
+          "couscous",
+          "noodles",
+          "groats"
+        ]
+      },
+      {
+        "category": "饮料",
+        "tokens": [
+          "beverages",
+          "waters",
+          "juices",
+          "sodas",
+          "coffees",
+          "teas"
+        ]
+      },
+      {
+        "category": "其他食品",
+        "tokens": [
+          "sugars",
+          "salts",
+          "spices",
+          "condiments",
+          "sauces",
+          "snacks",
+          "chocolates",
+          "honeys",
+          "jams",
+          "desserts",
+          "canned-foods"
+        ]
+      }
+    ]
+  }
+}

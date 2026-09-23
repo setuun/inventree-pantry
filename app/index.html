@@ -1,0 +1,3622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#121212">
+<title>Pantry</title>
+<link rel="manifest" id="manifest" href="manifest.en.webmanifest">
+<script>
+  /* The home-screen name comes from the manifest, and the browser reads it long before the
+     app has loaded anything. So the language is guessed here, with the same order the app uses
+     later (own choice, then the browser), and only the manifest link is swapped. The list must
+     match LANGUAGES below; tools/check-app.py compares the two. */
+  (function () {
+    var have = ["de", "en", "ru", "zh"];
+    var pick = null;
+    try { pick = localStorage.getItem("vorrat.lang"); } catch (e) { /* private mode */ }
+    if (have.indexOf(pick) < 0) {
+      pick = null;
+      var nav = navigator.languages || [navigator.language || ""];
+      for (var i = 0; i < nav.length && !pick; i++) {
+        var base = String(nav[i]).toLowerCase().split("-")[0];
+        if (have.indexOf(base) >= 0) pick = base;
+      }
+    }
+    document.getElementById("manifest").href = "manifest." + (pick || "en") + ".webmanifest";
+  })();
+</script>
+<!--
+  Pantry ("Vorrat") — a phone-sized front end for the three things a household actually does
+  to an InvenTree stock item: book some in, use some up, count what is there.
+  https://github.com/setuun/inventree-pantry — MIT licensed.
+
+  WHY THIS EXISTS (docs/design.md)
+  The official Flutter app is an industrial stock-control client: every one of those three
+  actions is several screens deep, behind Part -> Stock Item -> Adjust. That is correct for a
+  warehouse and is the reason the pantry stopped being maintained. This page is the same three
+  actions as three buttons.
+
+  WHY IT IS SERVED FROM INVENTREE'S OWN ORIGIN, and not from anywhere nicer: no CORS preflight
+  on any call, and an existing /web/ session can be traded for an API token without the user
+  typing anything. The price is one extra route in InvenTree's own Caddyfile and a read-only
+  mount; both are in deploy/.
+
+  LANGUAGES: every word on screen comes from i18n/<lang>.json. See TRANSLATING.md.
+  CONFIGURATION: config.json next to this file (the same pantry.json the plugin reads).
+
+  AUTH: one login, then a year of silence. See the `auth` section below.
+-->
+<style>
+  /* Material Design dark theme, applied unconditionally rather than following the system.
+     The rules it actually imposes, since they are easy to undo by accident:
+       · the base surface is #121212, never pure black — black kills the sense of elevation
+       · higher surfaces are lighter, not shadowed: a card is #121212 with a white overlay
+         (~5% at 1dp), which is where #1E1E1E comes from
+       · text is white at fixed opacities: 87% primary, 60% secondary, 38% disabled
+       · saturated brand colours are replaced by their 200/300 tints, because a vivid hue on
+         a dark surface vibrates; #90CAF9 is Blue 200, and it carries BLACK text
+       · the error colour is #CF6679, Material's own dark-theme error
+     `color-scheme: dark` is not decoration: without it the browser still draws <select> and
+     <input type=date> — including the date picker popup — as light-mode widgets. */
+  :root {
+    color-scheme: dark;
+    --bg: #121212;
+    --card: #1e1e1e;            /* 1dp: #121212 + 5% white */
+    --card-2: #242424;          /* 4dp, for a surface sitting on a surface */
+    --ink: rgba(255, 255, 255, 0.87);
+    --muted: rgba(255, 255, 255, 0.60);
+    --line: rgba(255, 255, 255, 0.12);
+    --accent: #90caf9;          /* Blue 200 */
+    --accent-ink: rgba(0, 0, 0, 0.87);
+    --ok: #81c784;              /* Green 300 */
+    --warn: #ffb74d;            /* Orange 300 */
+    --bad: #cf6679;             /* Material dark error */
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  #boot {
+    position: fixed; inset: 0; z-index: 60; background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+  }
+  body.ready #boot { display: none; }
+  .ring {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 3px solid var(--line); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* A spinner that cannot spin should at least not sit there as a broken-looking ring. */
+  @media (prefers-reduced-motion: reduce) {
+    .ring { animation: none; border-top-color: var(--line); opacity: .6; }
+  }
+
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  }
+  /* Same surface and height as the bottom bar, so the page reads as content held between two
+     bars rather than as a heading that happens to stick. The old rule was a leftover: it still
+     carried the bottom margin from when the tabs sat underneath it, a float for the sign-out
+     link, and an underlined text link in an interface that speaks in icons everywhere else. */
+  header {
+    position: sticky; top: 0; z-index: 5;
+    background: var(--card); border-bottom: 1px solid var(--line);
+    padding: 0 14px; min-height: 56px;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .brand .mark { display: flex; color: var(--accent); flex: none; }
+  .brand .mark svg { fill: currentColor; display: block; }
+  h1 { font-size: 18px; font-weight: 700; margin: 0; letter-spacing: .2px; }
+  /* The version is genuinely used — to tell at a glance whether the phone has the deploy you
+     just made — so it stays, but as a quiet chip rather than as part of the title. */
+  .ver {
+    font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+    border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; flex: none;
+  }
+  .hdrright { display: flex; align-items: center; gap: 4px; flex: none; }
+  #who { color: var(--muted); font-size: 13px; }
+  /* The language picker is a real <select>, laid invisibly over a small chip: the platform
+     draws the list (and reads it out), the header only has to show two letters. */
+  .langpick {
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    min-width: 40px; height: 40px; color: var(--muted); font-size: 12px; font-weight: 700;
+    letter-spacing: .04em;
+  }
+  .langpick select {
+    position: absolute; inset: 0; opacity: 0; width: 100%; min-height: 0; padding: 0;
+    cursor: pointer;
+  }
+  button.btn.iconbtn#logout {
+    width: 40px; min-height: 40px; border: 0; background: none; color: var(--muted);
+  }
+  /* Sits clear of the bar and of the home indicator, on the side the thumb reaches. Above the
+     content but below the messages, so a confirmation is never hidden by the button that
+     caused it. */
+  .fab {
+    position: fixed; right: 16px; z-index: 25;
+    bottom: calc(72px + env(safe-area-inset-bottom));
+    display: inline-flex; align-items: center; gap: 8px;
+    min-height: 48px; padding: 0 20px; border: 0; border-radius: 999px;
+    background: var(--accent); color: var(--accent-ink);
+    font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  }
+  .fab svg { fill: currentColor; display: block; }
+  .fab:active { filter: brightness(.92); }
+
+  nav.bottombar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    display: flex; background: var(--card); border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav.bottombar button {
+    flex: 1; border: 0; background: none; color: var(--muted); font: inherit;
+    font-size: 11px; font-weight: 600; cursor: pointer; padding: 8px 4px 10px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 56px;
+  }
+  nav.bottombar button svg { fill: currentColor; display: block; }
+  nav.bottombar button[aria-selected="true"] { color: var(--accent); }
+  nav.bottombar .tabic { position: relative; display: flex; }
+  nav.bottombar .badge {
+    position: absolute; top: -5px; left: 13px;
+    background: var(--bad); color: rgba(0, 0, 0, 0.87);
+    border-radius: 999px; font-size: 10px; line-height: 1; padding: 3px 5px; font-weight: 700;
+  }
+  /* The bar is fixed, so the last card needs room to clear it — 56px of bar plus the home
+     indicator on phones that have one. */
+  main {
+    padding: 14px; max-width: 640px; margin: 0 auto;
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+  button.btn.buyrow {
+    display: flex; align-items: center; gap: 12px; padding: 12px 0; width: 100%;
+    border: 0; border-top: 1px solid var(--line); background: none; text-align: left;
+    border-radius: 0; font-weight: 400;
+  }
+  /* A section heading already draws a rule; the first row's own top border lands right under
+     it and reads as a double line.
+     ⚠️ The selector must out-specify the base rule, not merely come after it:
+     `.buyrow:first-of-type` is (0,2,0) and lost against `button.btn.buyrow` (0,2,1), so the
+     earlier attempt at this was dead CSS that looked correct. Same trap as .iconbtn and the
+     width. */
+  button.btn.buyrow:first-of-type { border-top: 0; }
+  /* Brief mark on the row you just came back from — enough to find your place at a glance,
+     short enough not to look like a selection that means something. */
+  .justleft { background: rgba(144, 202, 249, 0.14) !important; border-radius: 8px; }
+
+  .buyrow .need { font-weight: 700; color: var(--bad); font-variant-numeric: tabular-nums; }
+  /* Room for the floating button, so it never covers the last entry of the list. */
+  #view-buy { padding-bottom: 60px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px; margin-bottom: 12px;
+  }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row + .row { margin-top: 10px; }
+  .grow { flex: 1; min-width: 0; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  input, select, button.btn {
+    font: inherit; padding: 12px; border-radius: 10px; border: 1px solid var(--line);
+    /* A control on a card must not be the same colour as the card, or it disappears. In
+       Material terms it is simply the next elevation up. */
+    background: var(--card-2); color: var(--ink); width: 100%; min-height: 48px;
+  }
+  /* The platform's own dropdown marker is a small glyph pinned to the very edge, and it does
+     not scale with anything we set. Replaced by the same chevron the rest of the app uses,
+     drawn as a background image at 20px with real space around it — `appearance: none` removes
+     the original, and the extra right padding keeps long option text from running under it.
+     The colour is written out because a data URI cannot read a custom property; it matches
+     what --muted resolves to on this surface. */
+  select {
+    appearance: none; -webkit-appearance: none;
+    padding-right: 44px;
+    background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a6a6a6'><path d='M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    background-size: 20px 20px;
+  }
+
+  button.btn {
+    cursor: pointer; font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .btn .ic { display: inline-flex; }
+  .btn svg { fill: currentColor; display: block; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  button.ghost { background: transparent; }
+  /* Mobile first, and this is the whole point: three buttons sharing a 360px screen gives
+     each of them ~110px, which reads as cramped and mis-taps. Stack by default; go side by
+     side only once there is actually room. Same for the confirm/cancel pair in a panel. */
+  .actions { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 12px; }
+  /* A pair of one-word buttons is fine side by side even on the narrowest phone, and stacking
+     them would only push the form further down. It is the THREE-across row that was cramped. */
+  .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .buttons.solo { grid-template-columns: 1fr; }
+  @media (min-width: 480px) { .actions { grid-template-columns: 1fr 1fr 1fr; } }
+  .name { font-weight: 650; font-size: 17px; word-break: break-word; }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .qty { font-variant-numeric: tabular-nums; font-weight: 650; }
+  ul.stock { list-style: none; margin: 12px 0 0; padding: 0; }
+  /* One row = three stacked lines: what it is, how much and where, then the date with the
+     two controls beside it. Side by side, the name and a date pill and two buttons leave the
+     name about a third of a phone, which is what made this list unreadable. */
+  ul.stock li { padding: 12px 0; border-top: 1px solid var(--line); }
+  /* A section heading already draws a rule. Where a list follows one directly, the first row's
+     own top border lands right under it and reads as a double line — so drop it there, and
+     only there: in the overview the list follows a plain count line and needs its separator. */
+  h2.sec + ul.stock > li:first-child { border-top: 0; padding-top: 0; }
+  .rowfoot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-top: 8px;
+  }
+  .rowacts { display: flex; gap: 8px; flex: none; }
+  .pill {
+    font-size: 12px; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .pill.ok { color: var(--ok); border-color: var(--ok); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .pill.bad { color: var(--bad); border-color: var(--bad); }
+  /* `button.btn.iconbtn`, not `.iconbtn`: the shared control rule above is `button.btn`
+     (specificity 0,1,1) and sets width:100%, so a plain single class loses to it and the
+     pencil renders 135px wide, shoving the row past the viewport. Measured at 390px before
+     this was pinned down. Same family of trap as `[hidden]` vs an author `display`. */
+  button.btn.iconbtn {
+    width: 44px; min-height: 44px; flex: none; display: inline-flex;
+    align-items: center; justify-content: center; padding: 0;
+  }
+  button.btn.danger {
+    background: var(--bad); color: rgba(0, 0, 0, 0.87); border-color: transparent;
+  }
+  .iconbtn.warnink { color: var(--bad); }
+  .iconbtn svg { width: 20px; height: 20px; fill: currentColor; display: block; }
+  /* Placeholder where a part has no picture yet — dashed says "empty, and you may fill it". */
+  .thumb.empty {
+    border-style: dashed; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 11px; text-align: center; line-height: 1.2; padding: 4px;
+  }
+  .thumb { cursor: pointer; }
+  /* The product name in the stock list opens its card. Without this there is no route from
+     the inventory to a product at all — which is how "add a picture later" ended up
+     unreachable for anything you were not holding a barcode for. */
+  /* An overview row is one tap target for the whole article — name, place and date are what
+     you read, the detail page is where you act. */
+  button.btn.rowlink {
+    display: flex; gap: 12px; align-items: center; text-align: left;
+    width: 100%; padding: 10px 0; border: 0; background: none; min-height: 0;
+  }
+  /* Not scoped to .rowlink: the expiry list draws the same rows out of .buyrow, and an article
+     has to be recognisable by its picture in both places. */
+  .mini {
+    width: 48px; height: 48px; flex: none; object-fit: cover; border-radius: 8px;
+    background: var(--card-2); border: 1px solid var(--line);
+  }
+  .mini.empty {
+    border-style: dashed; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 16px;
+  }
+  .rowlink .who { min-width: 0; flex: 1; }
+  .rowlink .who .nm { font-weight: 600; }
+  .rowlink .chev { color: var(--muted); flex: none; display: flex; }
+  .rowlink .chev svg { fill: currentColor; display: block; }
+  .dates { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+  button.btn.back { width: auto; min-height: 40px; padding: 8px 12px; margin-bottom: 10px; }
+  .detailhead { display: flex; gap: 14px; align-items: flex-start; }
+  .detailhead .thumb { width: 96px; height: 96px; }
+  .facts { margin-top: 12px; }
+  .facts div { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+  .facts .k { color: var(--muted); }
+  .facts .v { text-align: right; }
+  h2.sec {
+    font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 12px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  .thumbwrap { flex: none; }
+  .lightbox {
+    position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.92);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
+  button.btn.iconbtn.lbclose {
+    position: absolute; top: 12px; right: 12px; background: none; border: 0;
+    color: rgba(255, 255, 255, 0.87);
+  }
+  /* A row of chips beats a <select> here: the whole point is to see everything first and
+     narrow only if you want to, and a dropdown hides both the options and the counts behind
+     a tap. Scrolls sideways inside itself, so the page body never does. */
+  .searchbox { position: relative; margin-bottom: 14px; }
+  .searchbox .ic { position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    color: var(--muted); display: flex; pointer-events: none; }
+  .searchbox .ic svg { fill: currentColor; display: block; }
+  .searchbox input { padding-left: 42px; padding-right: 46px; font-size: 16px; }
+  /* The browser's own clear button is a font glyph: it cannot be sized, coloured or aligned,
+     and next to a 20px SVG magnifier it looks like a speck. Hidden, and replaced with one of
+     ours that obeys the same icon rules as everything else. */
+  .searchbox input::-webkit-search-cancel-button,
+  .searchbox input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+  button.btn.iconbtn.clear {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    width: 38px; min-height: 38px; border: 0; background: none; color: var(--muted);
+  }
+  /* Two controls for two different questions, side by side, never scrolling sideways.
+     The place is a <select>: it holds any number of shelves behind one tap and the platform
+     draws the picker, where the chip row this replaces grew a horizontal scrollbar as soon as
+     the house had more than a few locations. "Fehlt" is a separate toggle because it asks a
+     different question — it narrows the same list by another criterion and COMBINES with a
+     place, which a row of chips could only ever express as "exactly one of these is on". */
+  .filterrow { display: flex; gap: 8px; align-items: stretch; }
+  .filterrow select { flex: 1; min-width: 0; font-size: 16px; }
+  button.btn.shortbtn {
+    flex: none; width: auto; padding: 0 14px; gap: 6px; font-size: 14px;
+    border-color: var(--bad); color: var(--bad); background: var(--card-2);
+  }
+  button.btn.shortbtn[aria-pressed="true"] {
+    background: var(--bad); color: rgba(0, 0, 0, 0.87); border-color: transparent;
+  }
+  .shortbtn .n { font-variant-numeric: tabular-nums; opacity: .8; }
+  .suggest { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .suggest button.btn {
+    width: auto; min-height: 42px; padding: 8px 16px; border-radius: 999px;
+    font-size: 14px; border-color: var(--accent); color: var(--accent); background: none;
+  }
+  .facts .v.short { color: var(--bad); font-weight: 700; }
+  .facts .v.fine { color: var(--ok); }
+  .head { display: flex; gap: 12px; align-items: flex-start; }
+  .thumb {
+    width: 64px; height: 64px; flex: none; object-fit: cover; border-radius: 10px;
+    background: var(--card-2); border: 1px solid var(--line);
+  }
+  .panel { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .field { margin-bottom: 14px; }
+  .field label { font-size: 14px; margin-bottom: 6px; }
+  /* Selects need the arrow drawn by the platform, but iOS shrinks the text to 11px unless the
+     font size is stated; 16px also stops mobile Safari zooming the page on focus. */
+  .field select, .field input { font-size: 16px; }
+  .field .hint { margin-top: 5px; }
+  /* `display: block` here is an AUTHOR rule and would beat the browser's own
+     `[hidden] { display: none }` — which is an origin below it, not merely a weaker selector.
+     Without the guard below, the video sits there as a black box before the camera is ever
+     switched on. Hence both lines; neither is redundant. */
+  #cam {
+    width: 100%; border-radius: var(--radius); background: #000; display: block;
+    margin-top: 10px;   /* keep it off the Suchen/Kamera row */
+  }
+  [hidden] { display: none !important; }
+  .hint { color: var(--muted); font-size: 13px; }
+  /* Centred, not bottom-anchored: at the bottom the fixed tab bar (z-index 30) simply covered
+     it, so the one message that has to be read — the warning before leaving — was invisible.
+     Above the lightbox as well, since a message about what just happened outranks the picture
+     it happened over; only the boot curtain sits higher. */
+  .toast {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 55;
+    background: var(--card-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 20px; font-size: 15px; line-height: 1.35; text-align: center;
+    max-width: min(86vw, 340px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+    animation: toastin .14s ease-out;
+  }
+  .toast.err { border-color: var(--bad); color: var(--bad); }
+  @keyframes toastin {
+    from { opacity: 0; transform: translate(-50%, -50%) scale(.96); }
+  }
+  @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+  .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<!-- Covers everything until the app knows which page it is on. Without it a reload visibly
+     renders the stock list first and only then swings over to the page you were actually on:
+     restoring a detail view has to put its list up behind it, and then fetch. It is markup
+     rather than something the script creates, so it is on screen from the first paint. -->
+<div id="boot"><div class="ring" role="status" data-i18n-aria-label="common.loading"></div></div>
+
+<!-- Text in the markup is marked, not written: `data-i18n` fills textContent, and
+     `data-i18n-<attribute>` fills that attribute. applyStatic() does both, once at boot and
+     again whenever the app puts this markup back after a login. -->
+<header>
+  <div class="brand">
+    <span class="mark" id="mark"></span>
+    <h1 data-i18n="app.name"></h1>
+    <span class="ver" id="ver"></span>
+  </div>
+  <div class="hdrright">
+    <span id="who"></span>
+    <label class="langpick" id="langpick" hidden>
+      <span id="langcode"></span>
+      <select id="lang" data-i18n-aria-label="lang.choose"></select>
+    </label>
+    <button class="btn ghost iconbtn" id="logout" hidden data-i18n-aria-label="auth.logout"></button>
+  </div>
+</header>
+
+<main>
+  <!-- ---------- Scan view ---------- -->
+  <section id="view-scan" hidden>
+    <div class="card">
+      <!-- Same section heading as every other card. It used to be a field <label>, which is a
+           different thing wearing a similar hat: lowercase, muted, no rule — and the one view
+           that looked unlike the rest. The placeholder already says what belongs in the box,
+           so the label was not carrying information either. -->
+      <h2 class="sec" data-i18n="scan.heading"></h2>
+      <div class="row">
+        <div class="grow">
+          <input id="ean" inputmode="numeric" autocomplete="off" data-i18n-placeholder="scan.placeholder">
+        </div>
+      </div>
+      <div class="buttons">
+        <button class="btn primary" id="go"></button>
+        <button class="btn ghost" id="camBtn"></button>
+      </div>
+      <video id="cam" hidden playsinline muted></video>
+      <p class="hint" id="camHint" hidden></p>
+    </div>
+    <div id="result"></div>
+  </section>
+
+  <!-- ---------- Stocktake view ---------- -->
+  <section id="view-stock">
+    <div class="card">
+      <div class="searchbox">
+        <span class="ic" id="searchicon"></span>
+        <input id="q" type="search" autocomplete="off" data-i18n-placeholder="stock.search">
+        <button class="btn ghost iconbtn clear" id="qclear" hidden
+                data-i18n-aria-label="common.clearSearch"></button>
+      </div>
+      <div class="filterrow">
+        <select id="locsel" data-i18n-aria-label="field.location"></select>
+        <button class="btn shortbtn" id="shortbtn" aria-pressed="false"></button>
+      </div>
+    </div>
+    <div id="stocklist"></div>
+  </section>
+
+  <!-- ---------- Shopping list ----------
+       The same shortfall the stock tab can filter to, but as its own destination: a list you
+       open in the shop, not a filter you have to remember to switch on. -->
+  <section id="view-buy" hidden>
+    <div class="card">
+      <div class="searchbox">
+        <span class="ic" id="buysearchicon"></span>
+        <input id="buyq" type="search" autocomplete="off" data-i18n-placeholder="buy.search">
+        <button class="btn ghost iconbtn clear" id="buyqclear" hidden
+                data-i18n-aria-label="common.clearSearch"></button>
+      </div>
+      <div class="buttons" id="buycontrols"></div>
+    </div>
+    <div class="card" id="buylist"></div>
+  </section>
+
+  <!-- ---------- Expiring soon ----------
+       Its own destination rather than a filter, for the same reason the shopping list is:
+       a number you have to go looking for is a number nobody looks at. -->
+  <section id="view-expiry" hidden>
+    <div class="card" id="expirylist"></div>
+  </section>
+
+  <!-- ---------- New Bedarf ----------
+       Its own page rather than a panel: it is a form you arrive at deliberately, not an
+       adjustment to something already on screen, and on a phone a panel under a list of 80
+       rows puts the fields somewhere you have to hunt for. -->
+  <section id="view-new" hidden>
+    <button class="btn ghost back" id="newback"></button>
+    <div class="card" id="newform"></div>
+  </section>
+
+  <!-- ---------- Article detail ----------
+       Its own view, not a card glued under the scan box. Everything that changes an article
+       lives here and only here: the overview stays a list you can read at arm's length. -->
+  <section id="view-detail" hidden>
+    <button class="btn ghost back" id="detailback"></button>
+    <div id="detail"></div>
+  </section>
+</main>
+
+<!-- Floats above the bar rather than sitting at the end of the list. On a list of eighty
+     entries the action at the bottom may as well not exist — you would have to scroll past
+     everything to find out it is there. Outside <main> on purpose, so scrolling cannot take
+     it away. -->
+<button class="fab" id="fab" hidden></button>
+
+<!-- A bottom bar, because this is used one-handed while standing at a shelf: the thumb
+     reaches the bottom of a phone, not the top. The default tab must be marked here too, or a
+     reload visibly starts on the wrong one and jumps. -->
+<nav class="bottombar">
+  <button id="tab-stock" aria-selected="true"></button>
+  <button id="tab-buy" aria-selected="false"></button>
+  <button id="tab-expiry" aria-selected="false"></button>
+  <button id="tab-scan" aria-selected="false"></button>
+</nav>
+
+<script>
+"use strict";
+
+/* VOCABULARY — the code speaks English, the interface speaks whatever i18n/<lang>.json says,
+   and these are the words that matter (German in brackets, the language it was built in):
+     requirement  ("Bedarf")    the thing you shop for; holds the target, no barcode, no stock
+     variety      ("Sorte")     a concrete product under a requirement; holds the barcode
+     target       ("Soll")      how many you want to keep
+     batch        ("Charge")    one stock row: a quantity, a place and one expiry date
+     stock        ("Bestand")   what is actually there
+     location     ("Lagerort")  where it lies
+   In InvenTree's own words a requirement is a template part and a variety is its variant. */
+
+const VERSION = "2.0.0";
+
+// --- tiny helpers ------------------------------------------------------------
+const $ = (s) => document.querySelector(s);
+const el = (tag, props) => Object.assign(document.createElement(tag), props || {});
+
+// --- configuration -----------------------------------------------------------
+/* Read from config.json next to this page — the same pantry.json the plugin, the taxonomy
+   script and the expiry watchdog read, so all four agree on names and on what "soon" means.
+   Every key has a default, and a missing file is not an error: the page then runs with no
+   preferred shelf and the stock warning rule below. */
+const CONFIG_DEFAULTS = {
+  language: "en",
+  pack_parameter: "Pack content",
+  app: { book_location: "" },
+  openfoodfacts: { fallback_location: "" },
+  expiry: { warn_days: 7, lead_fraction: 0.2, lead_min_days: 5, lead_max_days: 90 },
+};
+let CONFIG = CONFIG_DEFAULTS;
+
+async function loadConfig() {
+  try {
+    const res = await fetch("config.json", { cache: "no-cache" });
+    // The Caddy route answers an unknown path with index.html, so a 200 is not proof of JSON.
+    const data = res.ok ? await res.json() : null;
+    if (data && typeof data === "object") {
+      CONFIG = Object.assign({}, CONFIG_DEFAULTS, data, {
+        app: Object.assign({}, CONFIG_DEFAULTS.app, data.app),
+        openfoodfacts: Object.assign({}, CONFIG_DEFAULTS.openfoodfacts, data.openfoodfacts),
+        expiry: Object.assign({}, CONFIG_DEFAULTS.expiry, data.expiry),
+      });
+    }
+  } catch (e) { /* no config.json: defaults */ }
+}
+
+/* Read once, after loadConfig(). Kept as plain constants so the rest of the code reads the
+   way it did when these were baked in at deploy time. */
+let DEFAULT_LOCATION = "", BOOK_LOCATION = "", WARN_DAYS = 7, PACK_NAME = "";
+let LEAD_FRACTION = 0.2, LEAD_MIN_DAYS = 5, LEAD_MAX_DAYS = 90;
+
+function applyConfig() {
+  DEFAULT_LOCATION = CONFIG.openfoodfacts.fallback_location || "";
+  BOOK_LOCATION = CONFIG.app.book_location || "";
+  PACK_NAME = CONFIG.pack_parameter || CONFIG_DEFAULTS.pack_parameter;
+  WARN_DAYS = Number(CONFIG.expiry.warn_days) || 0;
+  LEAD_FRACTION = Number(CONFIG.expiry.lead_fraction) || 0;
+  LEAD_MIN_DAYS = Number(CONFIG.expiry.lead_min_days) || 0;
+  LEAD_MAX_DAYS = Number(CONFIG.expiry.lead_max_days) || 0;
+}
+
+// --- languages ---------------------------------------------------------------
+/* The registry of shipped languages. Adding one means: i18n/<code>.json, a
+   manifest.<code>.webmanifest, one line here and the code in the <head> list — TRANSLATING.md
+   walks through it, and tools/check-app.py refuses a language that is missing any of them.
+   `locale` is what Intl formats dates, numbers and sorting with. */
+const LANGUAGES = {
+  de: { name: "Deutsch", locale: "de-DE" },
+  en: { name: "English", locale: "en-GB" },
+  ru: { name: "Русский", locale: "ru-RU" },
+  zh: { name: "中文", locale: "zh-CN" },
+};
+const LANG_KEY = "vorrat.lang";
+
+let LANG = "en";
+let LOCALE = "en-GB";
+let STR = {};          // the chosen language
+let FALLBACK = {};     // English, for any key a translation has not caught up with yet
+let PLURAL = null;
+
+/* Own choice first, then the browser, then the household's default from config.json. The
+   browser outranks the config on purpose: one install serves a whole household, and the
+   person holding the phone is the one who has to read it. */
+function pickLanguage() {
+  let own = null;
+  try { own = localStorage.getItem(LANG_KEY); } catch (e) { /* private mode */ }
+  if (own && LANGUAGES[own]) return own;
+  for (const tag of (navigator.languages || [navigator.language || ""])) {
+    const base = String(tag).toLowerCase().split("-")[0];
+    if (LANGUAGES[base]) return base;
+  }
+  return LANGUAGES[CONFIG.language] ? CONFIG.language : "en";
+}
+
+async function loadStrings(code) {
+  try {
+    const res = await fetch("i18n/" + code + ".json", { cache: "no-cache" });
+    return res.ok ? await res.json() : {};
+  } catch (e) { return {}; }
+}
+
+async function loadLanguage() {
+  LANG = pickLanguage();
+  LOCALE = LANGUAGES[LANG].locale;
+  const [own, en] = await Promise.all([loadStrings(LANG), LANG === "en" ? null : loadStrings("en")]);
+  STR = own;
+  FALLBACK = en || own;
+  PLURAL = new Intl.PluralRules(LOCALE);
+  document.documentElement.lang = LANG;
+  document.title = t("app.name");
+}
+
+/* One lookup for every word on screen.
+     t("tab.stock")                     plain text
+     t("stock.have", { amount: "2 kg" }) {amount} is replaced
+     t("days.in", { n: 3 })             the value is an object of plural forms, picked by
+                                        Intl.PluralRules for `n` (Russian needs one/few/many)
+   A key that exists nowhere comes back as itself, which is ugly on purpose: it is visible. */
+function t(key, vars) {
+  let s = key in STR ? STR[key] : key in FALLBACK ? FALLBACK[key] : key;
+  if (s && typeof s === "object") {
+    const n = Number(vars && vars.n);
+    s = s[PLURAL.select(n)] ?? s.other ?? "";
+  }
+  return String(s).replace(/\{(\w+)\}/g, (m, k) => (vars && k in vars ? String(vars[k]) : m));
+}
+
+/* Fill every marked element under `root`: data-i18n sets the text, data-i18n-<attr> sets
+   that attribute. */
+function applyStatic(root) {
+  for (const node of (root || document).querySelectorAll("*")) {
+    for (const a of [...node.attributes]) {
+      if (a.name === "data-i18n") node.textContent = t(a.value);
+      else if (a.name.startsWith("data-i18n-")) node.setAttribute(a.name.slice(10), t(a.value));
+    }
+  }
+}
+
+/* A change of language reloads the page. Everything on screen is built from strings at the
+   moment it is drawn, and a reload is the one way to be sure none is left behind; the view the
+   user was on survives it (see saveView). */
+function drawLanguagePicker() {
+  const sel = $("#lang");
+  sel.innerHTML = "";
+  for (const [code, info] of Object.entries(LANGUAGES)) {
+    sel.append(el("option", { value: code, textContent: info.name }));
+  }
+  sel.value = LANG;
+  $("#langcode").textContent = LANG.toUpperCase();
+  sel.onchange = () => {
+    try { localStorage.setItem(LANG_KEY, sel.value); } catch (e) { /* this session only */ }
+    location.reload();
+  };
+  $("#langpick").hidden = false;
+}
+
+// --- formatting --------------------------------------------------------------
+// Short date in the chosen language: 13.9.2028, 13/09/2028, 13.09.2028, 2028/9/13.
+const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString(LOCALE) : "");
+const byName = (a, b) => (a || "").localeCompare(b || "", LOCALE);
+
+/* Units are stored as InvenTree stores them ("", "kg", "l") and only DRAWN in the reader's
+   script: кг and л in Russian, 公斤 and 升 in Chinese. The stored value never changes. */
+function unitLabel(u) {
+  if (!u) return "";
+  const key = "unit." + u + ".short";
+  const s = t(key);
+  return s === key ? u : s;
+}
+
+/* Words for matching a product to a requirement. Intl.Segmenter where the browser has it —
+   Chinese has no spaces, so splitting on non-letters would see a product name as ONE word —
+   and a Unicode-aware split everywhere else. Brackets (brand), numbers and units (packet size)
+   are dropped first: those are exactly what must NOT drive the match. */
+const SEGMENTER = typeof Intl !== "undefined" && Intl.Segmenter ? new Map() : null;
+const CJK = /[぀-ヿ㐀-鿿豈-﫿]/;
+
+function words(s) {
+  const bare = String(s || "").toLowerCase()
+    .replace(/\([^)]*\)|（[^）]*）/g, " ")
+    .replace(/\d+(?:[.,]\d+)?\s*(?:(?:kg|mg|g|ml|cl|l|stk|stück|er|pcs|шт|кг|мг|г|мл|л)(?!\p{L})|千克|公斤|毫升|克|升|个|袋|瓶|罐|包)?/gu, " ");
+  let out;
+  if (SEGMENTER) {
+    if (!SEGMENTER.has(LOCALE)) SEGMENTER.set(LOCALE, new Intl.Segmenter(LOCALE, { granularity: "word" }));
+    out = [...SEGMENTER.get(LOCALE).segment(bare)].filter((x) => x.isWordLike).map((x) => x.segment);
+  } else {
+    out = bare.split(/[^\p{L}\p{N}]+/u);
+  }
+  // Three letters is noise in German ("mit", "und"); two Chinese characters are a whole word.
+  return out.filter((w) => w.length >= (CJK.test(w) ? 2 : 3));
+}
+
+/* How long a word has to be to count as evidence on its own. */
+const strongWord = (w) => w.length >= (CJK.test(w) ? 2 : 4);
+
+function toast(msg, isError) {
+  // One at a time: two stacked in the middle of the screen would sit on top of each other.
+  const old = document.querySelector(".toast");
+  if (old) old.remove();
+
+  const box = el("div", { className: "toast" + (isError ? " err" : ""), textContent: msg });
+  document.body.appendChild(box);
+  // An error has to be readable; 2.6 s is enough to confirm something worked and not enough
+  // to read why something did not — which is how a failed photo upload looked like silence.
+  setTimeout(() => box.remove(), isError ? 7000 : 2600);
+}
+
+/* --- auth: one login, then a year of silence --------------------------------
+   The page keeps an InvenTree API token in localStorage and sends it as
+   `Authorization: Token …`.
+
+   Why a token rather than the session cookie this page first used: the session belongs to the
+   browser, so "signed in to /vorrat/" really meant "signed in to /web/ recently, in this same
+   browser" — which is exactly the detour that made the page annoying, and it expires out from
+   under a PWA sitting on the home screen. A token outlives that. It also drops the CSRF dance
+   entirely: DRF's TokenAuthentication is CSRF-exempt, so no `csrftoken` cookie has to exist
+   and no header has to be echoed. Verified live 2026-09-14: POST /api/barcode/ with only the
+   token header succeeds.
+
+   The password is sent exactly once, to the same origin, over TLS, and is never stored.
+   The token is per DEVICE — its `name` carries a random id kept in localStorage — so it shows
+   up as its own row under InvenTree's API tokens and can be revoked there without locking the
+   other phones out. Minting is idempotent: asking again under the same name returns the SAME
+   token instead of piling up new ones (verified). Tokens expire after a year; when that
+   happens the next call 401s, the token is dropped and the login card comes back. */
+const TOKEN_KEY = "vorrat.token";
+const DEVICE_KEY = "vorrat.device";
+let TOKEN = null;
+let ME = null;
+
+function deviceName() {
+  let d = null;
+  try { d = localStorage.getItem(DEVICE_KEY); } catch (e) { /* private mode */ }
+  if (!d) {
+    d = "vorrat-" + Math.random().toString(36).slice(2, 8);
+    try { localStorage.setItem(DEVICE_KEY, d); } catch (e) { /* ignore */ }
+  }
+  return d;
+}
+
+function storeToken(token) {
+  TOKEN = token;
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY);
+  } catch (e) { /* the app still works for this session, just not the next one */ }
+}
+
+/* `auth` is the Authorization header to mint WITH: Basic for a typed password, or nothing at
+   all to let an existing /web/ session vouch for us. Returns the token, or null. */
+async function mintToken(auth) {
+  let res;
+  try {
+    res = await fetch("/api/user/me/token/?name=" + encodeURIComponent(deviceName()),
+                      { credentials: "same-origin", headers: auth ? { Authorization: auth } : {} });
+  } catch (e) { return null; }
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return (data && data.token) || null;
+}
+
+async function api(path, opts) {
+  const o = Object.assign({ credentials: "same-origin", headers: {} }, opts || {});
+  // FormData must go through as-is: the browser has to set Content-Type itself so the
+  // multipart boundary is included. Setting it by hand produces a request Django cannot parse.
+  const isForm = typeof FormData !== "undefined" && o.body instanceof FormData;
+  if (o.body !== undefined && typeof o.body !== "string" && !isForm) {
+    o.headers["Content-Type"] = "application/json";
+    o.body = JSON.stringify(o.body);
+  }
+  if (TOKEN) o.headers["Authorization"] = "Token " + TOKEN;
+
+  const res = await fetch("/api" + path, o);
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) { data = { detail: text }; }
+
+  if (res.status === 401 || res.status === 403) {
+    // `quiet` is for the boot probe, which expects to be turned away and handles it itself.
+    if (!o.quiet) signOut(t("auth.expired"));
+    throw new Error(t("auth.notSignedIn"));
+  }
+  if (!res.ok) throw new Error(apiError(data, res.status));
+  return data;
+}
+
+/* DRF reports field problems as {"image": ["Upload a valid image."]} — none of the three keys
+   we used to look at. A rejected photo therefore surfaced to the user as the bare string
+   "400", which says nothing about what to do. Observed for real on 2026-09-15. */
+function apiError(data, status) {
+  if (!data) return String(status);
+
+  const direct = data.error || data.detail || data.non_field_errors;
+  if (direct) return Array.isArray(direct) ? direct.join(" ") : String(direct);
+
+  if (typeof data === "object") {
+    for (const key of Object.keys(data)) {
+      const v = data[key];
+      if (Array.isArray(v) && v.length) return key + ": " + v[0];
+      if (typeof v === "string" && v) return key + ": " + v;
+    }
+  }
+
+  return String(status);
+}
+
+/* Raise the curtain. Called from exactly two places — once the restored page is on screen,
+   and when the login card goes up instead — so there is no path that leaves it stuck. */
+function ready() {
+  document.body.classList.add("ready");
+}
+
+function signOut(msg) {
+  storeToken(null);
+  ME = null;
+  showLogin(msg);
+}
+
+function showLogin(msg) {
+  ready();
+  $("#logout").hidden = true;
+  $("#who").textContent = "";
+  document.querySelector("nav").hidden = true;
+  const main = document.querySelector("main");
+  main.innerHTML = "";
+
+  const c = el("div", { className: "card" });
+  if (msg) c.append(el("div", { className: "err", textContent: msg }));
+  c.append(el("p", { className: "hint", textContent: t("auth.intro") }));
+
+  const u = el("input", { id: "u", autocomplete: "username", placeholder: t("auth.username") });
+  const pw = el("input", { id: "pw", type: "password", autocomplete: "current-password",
+                           placeholder: t("auth.password") });
+  const go = el("button", { className: "btn primary", textContent: t("auth.login") });
+  const r1 = el("div", { className: "row" }); r1.append(u);
+  const r2 = el("div", { className: "row" }); r2.append(pw);
+  const r3 = el("div", { className: "row" }); r3.append(go);
+
+  const submit = async () => {
+    if (!u.value || !pw.value) return toast(t("auth.missing"), true);
+    go.disabled = true;
+    go.textContent = t("auth.loggingIn");
+    // btoa() is Latin-1 only; encodeURIComponent/unescape widens a UTF-8 password first.
+    const basic = "Basic " + btoa(unescape(encodeURIComponent(u.value + ":" + pw.value)));
+    const token = await mintToken(basic);
+    go.disabled = false;
+    go.textContent = t("auth.login");
+    if (!token) return toast(t("auth.failed"), true);
+    storeToken(token);
+    startApp();
+  };
+  go.onclick = submit;
+  pw.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+
+  c.append(r1, r2, r3);
+  main.append(c);
+  u.focus();
+}
+
+// --- shared state ------------------------------------------------------------
+let LOCATIONS = [];
+let CATEGORIES = [];
+const locName = (pk) => (LOCATIONS.find((l) => l.pk === pk) || {}).pathstring || "—";
+
+function expiryPill(iso) {
+  if (!iso) return el("span", { className: "pill", textContent: t("expiry.none") });
+  const days = Math.round((new Date(iso) - new Date()) / 86400000);
+  const date = fmtDate(iso);
+  if (days < 0) {
+    return el("span", { className: "pill bad", textContent: t("expiry.expiredOn", { date: date }) });
+  }
+  if (days <= WARN_DAYS) return el("span", { className: "pill warn", textContent: date });
+  return el("span", { className: "pill ok", textContent: date });
+}
+
+/* A card holding one muted line — the loading, empty and error states of every list. Built
+   with textContent, so a message from the server can never be read as markup. */
+function hintCard(text, cls) {
+  return el("div", { className: cls || "card hint", textContent: text });
+}
+
+// --- scan --------------------------------------------------------------------
+async function lookup(code) {
+  code = (code || "").trim();
+  if (!code) return;
+  $("#result").innerHTML = "";
+  $("#result").append(hintCard(t("scan.searching")));
+  let res;
+  try {
+    res = await api("/barcode/", { method: "POST", body: { barcode: code } });
+  } catch (e) {
+    /* An unknown barcode used to be a dead end that told the user to go and use another
+       application. It is in fact the most common thing that happens with a new product, and
+       the answer is a form: name it, file it, and the barcode is bound to it on the spot. */
+    $("#result").innerHTML = "";
+    const c = el("div", { className: "card" });
+    c.append(el("h2", { className: "sec", textContent: t("scan.unknown") }));
+    c.append(el("div", { className: "hint", textContent: t("scan.unknownHint", { code: code }) }));
+    const go = labelButton("primary", "plus", t("scan.create"));
+    go.style.marginTop = "12px";
+    go.onclick = () => panelNewArticle(c, code);
+    c.append(go);
+    $("#result").append(c);
+    return;
+  }
+  // A scan can resolve to a part, to one specific stock item, or to a shelf. Only the first
+  // is the pantry case; the other two are answered honestly rather than silently ignored.
+  $("#result").innerHTML = "";
+  if (res.part && res.part.pk) return openPart(res.part.pk, "scan");
+  if (res.stockitem && res.stockitem.pk) {
+    const it = await api("/stock/" + res.stockitem.pk + "/?part_detail=true");
+    return openPart(it.part, "scan");
+  }
+  if (res.stocklocation && res.stocklocation.pk) {
+    // Scanning a shelf's own QR label filters the list to it.
+    STOCK_FILTER = locName(res.stocklocation.pk);
+    $("#tab-stock").click();
+    return;
+  }
+  $("#result").append(hintCard(t("scan.noPart")));
+}
+
+/* Only ever one action panel open at a time — on a phone two stacked forms is a maze. */
+let PANEL = null;
+/* Set when the app opened a form by itself rather than the user asking for it. The back
+   gesture must not spend a press closing something nobody opened. */
+let PANEL_AUTO = false;
+
+/* Part images live under /media/, which the inner Caddy puts behind forward_auth. An <img src>
+   cannot carry an Authorization header, and Basic is refused there outright, so a plain src
+   would 401 for anyone signed in with a token rather than a /web/ session — which, since
+   v1.1, is everyone. Verified live 2026-09-14: /media/… answers 401 with no auth, 401 with
+   Basic, 200 with the token header. Hence fetch + object URL. */
+/* Cached per media URL, for the whole session. The overview draws one thumbnail per article
+   and re-draws on every filter tap, so fetching them again each time would be pointless
+   traffic; and there are tens of articles, not thousands, so nothing here needs evicting.
+   Promises are cached, not URLs, so two rows asking at once share one request. */
+const IMG_CACHE = new Map();
+
+async function imageUrl(url) {
+  if (IMG_CACHE.has(url)) return IMG_CACHE.get(url);
+  const pending = (async () => {
+    try {
+      const res = await fetch(url, {
+        credentials: "same-origin",
+        headers: TOKEN ? { Authorization: "Token " + TOKEN } : {},
+      });
+      if (!res.ok) return null;
+      return URL.createObjectURL(await res.blob());
+    } catch (e) { return null; }
+  })();
+  IMG_CACHE.set(url, pending);
+  return pending;
+}
+
+/* Put a /media/ picture into an <img>, through the token-carrying fetch above. */
+async function authImage(img, url) {
+  const u = await imageUrl(url);
+  if (!u) return false;
+  img.src = u;
+  img.hidden = false;
+  return true;
+}
+
+/* The little square in front of a list row: the article's photo, or its initial while there is
+   none. Takes the PartBrief that comes attached to the stock row, so a list costs no extra
+   request per article — only the image fetch, and that is cached.
+
+   ⚠️ `thumbnail` is NEVER empty: for a part without a picture InvenTree substitutes
+   /static/img/blank_image.thumbnail.png, which loads perfectly well and would put a grey
+   placeholder graphic in place of our initial — and, worse, hide the fact that no photo has been
+   set. `image` is the honest field: it is null in that case. */
+function miniThumb(pd, name) {
+  const img = el("img", { className: "mini", alt: "", hidden: true });
+  const ph = el("div", { className: "mini empty",
+                         textContent: (String(name || "?")[0] || "?").toUpperCase() });
+  const src = (pd || {}).image ? (pd.thumbnail || pd.image) : null;
+  if (src) authImage(img, src).then((ok) => { if (ok) ph.hidden = true; });
+  return [img, ph];
+}
+
+/* Bumped on every detail render. A pending image poll checks it and gives up the moment the
+   user has moved on, so scanning five things in a row does not leave five pollers running. */
+let CARD_GEN = 0;
+
+/* A freshly scanned product has no picture yet: the plugin queues the download on InvenTree's
+   worker rather than making the scan wait nine seconds for openfoodfacts' image host. So look
+   again a few times, then stop — the picture also simply appears on the next visit. */
+async function pollImage(pk, img, gen) {
+  for (let i = 0; i < 6; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (gen !== CARD_GEN) return false;
+    let p;
+    try { p = await api("/part/" + pk + "/", { quiet: true }); } catch (e) { return false; }
+    if (p.image) return await authImage(img, p.image);
+  }
+  return false;
+}
+
+/* A pencil, not a tick. A tick means "done/confirm" everywhere else in this page (it is the
+   label on the confirm button), so using it to mean "edit" made the one row control ambiguous. */
+/* One path per symbol, drawn on a 24×24 grid and filled with currentColor, so every icon
+   inherits the colour of whatever it sits in and can be asked for at any size. Text glyphs
+   (›, ✓, ←) were doing this job before and could not: their size and weight come from the
+   font, they sit on the text baseline rather than centred, and they differ per platform. */
+const ICON = {
+  pencil: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.21a1 1 0 0 0 0-1.41'
+        + 'l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
+  trash: 'M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
+  chevron: 'M9.29 6.71 10.7 5.3 17.41 12l-6.71 6.7-1.41-1.41L14.59 12z',
+  back: 'M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.42-1.41L7.83 13H20z',
+  plus: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z',
+  minus: 'M19 13H5v-2h14z',
+  check: 'M9 16.17 4.83 12 3.41 13.41 9 19 21 7l-1.41-1.42z',
+  search: 'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59'
+        + ' 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z',
+  camera: 'M9 2 7.17 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3.17'
+        + 'L15 2zm3 5a6 6 0 1 1 0 12 6 6 0 0 1 0-12zm0 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
+  close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19'
+       + ' 19 17.59 13.41 12z',
+  image: 'M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5'
+       + 'l2.5 3.01L14.5 12l4.5 6H5z',
+  alert: 'M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z',
+  list: 'M3 13h2v-2H3zm0 4h2v-2H3zm0-8h2V7H3zm4 4h14v-2H7zm0 4h14v-2H7zM7 7v2h14V7z',
+  cart: 'M7 18a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM1 2v2h2l3.6 7.59-1.35 2.45A2 2 0 0 0 7 17h12v-2'
+      + 'H7.42a.25.25 0 0 1-.22-.37L8.1 13h7.45a2 2 0 0 0 1.75-1.03l3.58-6.49L19.13 4 15.55 11'
+      + 'H8.53L4.27 2zm16 16a2 2 0 1 0 0 4 2 2 0 0 0 0-4z',
+  scan: 'M3 3h6v2H5v4H3zm12 0h6v6h-2V5h-4zM3 15h2v4h4v2H3zm16 0h2v6h-6v-2h4zM4 11h16v2H4z',
+  share: 'M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7'
+       + 'l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 1 0-3-3c0 .24.04.47.09.7L7.04 9.81A3 3 0 1 0'
+       + ' 5 15c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65a2.92 2.92 0 1 0 3.92'
+       + '-2.92z',
+  copy: 'M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2'
+      + '-2V7a2 2 0 0 0-2-2zm0 16H8V7h11z',
+  /* An hourglass, not a clock: "läuft ab" is about time running out, not about what time it
+     is. The clock this replaced also rendered as a solid disc — its outline and its hands were
+     one filled path drawn the same way round, so nothing was cut out of the circle. Shapes
+     meant to read as outlines need a counter-path in the OPPOSITE direction; this one is built
+     from two closed halves and needs none. */
+  hourglass: 'M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01'
+           + 'H18V2H6zm10 14.5V20H8v-3.5l4-4 4 4zm-4-5l-4-4V4h8v3.5l-4 4z',
+  box: 'M20 2H4c-1 0-2 .9-2 2v3.01c0 .72.43 1.34 1 1.69V20c0 1.1 1.1 2 2 2h14c.9 0 2-.9 2-2V8.7'
+     + 'c.57-.35 1-.97 1-1.69V4c0-1.1-1-2-2-2zm-5 12H9v-2h6v2zm5-7H4V4h16v3z',
+  logout: 'M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14'
+        + 'c0 1.1.9 2 2 2h8v-2H4z',
+};
+
+function icon(name, size) {
+  const n = size || 20;
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" width="' + n
+       + '" height="' + n + '"><path d="' + ICON[name] + '"/></svg>';
+}
+
+/* A button that is an icon plus a word. The icon goes in its own span so the flex gap on
+   .btn spaces the two without a margin that would also apply to icon-only buttons. */
+function labelButton(cls, name, text) {
+  const b = el("button", { className: "btn " + cls });
+  const ic = el("span", { className: "ic" });
+  ic.innerHTML = icon(name);
+  b.append(ic, el("span", { textContent: text }));
+  return b;
+}
+
+function iconButton(title, name, onClick, extra) {
+  const b = el("button", { className: "btn ghost iconbtn" + (extra ? " " + extra : ""),
+                           title: title });
+  b.setAttribute("aria-label", title);
+  b.innerHTML = icon(name);
+  b.onclick = onClick;
+  return b;
+}
+
+const pencilButton = (title, fn) => iconButton(title, "pencil", fn);
+const trashButton = (title, fn) => iconButton(title, "trash", fn, "warnink");
+
+/* The footer line of a stock row: the date on the left, edit and delete on the right. Shared
+   by both lists so they cannot drift apart. */
+function rowFoot(item, onEdit, onDelete) {
+  const foot = el("div", { className: "rowfoot" });
+  foot.append(expiryPill(item.expiry_date));
+  const acts = el("div", { className: "rowacts" });
+  acts.append(pencilButton(t("batch.edit"), onEdit),
+              trashButton(t("batch.delete"), onDelete));
+  foot.append(acts);
+  return foot;
+}
+
+/* Quantity as a 1..100 dropdown: on a phone that is a tap and a flick, where a number input is
+   a keyboard covering half the screen. `current` is prepended when it falls outside the range
+   or is fractional, so counting 250 g of something can never silently round it to 100. */
+function qtySelect(current, selected) {
+  const s = el("select");
+  const vals = [];
+  const cur = Number(current);
+  if (isFinite(cur) && cur > 0 && (cur > 100 || !Number.isInteger(cur))) vals.push(cur);
+  for (let i = 1; i <= 100; i++) vals.push(i);
+  for (const v of vals) s.append(el("option", { value: String(v), textContent: fmtNum(v) }));
+  const want = Number(selected);
+  s.value = String(isFinite(want) && want > 0 ? want : 1);
+  return s;
+}
+
+/* Pieces, kilograms or litres. The stored values are InvenTree's ("" for pieces); only the
+   words are the reader's. */
+function unitSelect() {
+  const s = el("select");
+  for (const [v, key] of [["", "unit.pieces"], ["kg", "unit.kg"], ["l", "unit.l"]]) {
+    s.append(el("option", { value: v, textContent: t(key) }));
+  }
+  return s;
+}
+
+/* ---- Quantities in base units ------------------------------------------------------------
+   A requirement like "rice" is a target in kilograms, not a number of packets: 4 kg stay 4 kg,
+   whether in a 1-kg packet or an 18-kg sack. This app originally counted packets, and that
+   worked right up until somebody bought a sack — 22.5 kg of rice read as "2 of 4".
+
+   `Part.units` says what an article counts in ("" = pieces); the pack-content parameter on the
+   product says how much is in one packet. Booking in still happens in packets, the app
+   multiplies, and the base amount is what gets stored — InvenTree compares `low_stock` against
+   exactly that number, so the shopping list stays right on the server side too. */
+const PACK = new Map();          // product pk -> content per packet
+const PACK_PARAM = new Map();    // product pk -> pk of that parameter, for later corrections
+let PACK_TPL = null;             // pk of the pack-content parameter template
+
+/* The REQUIREMENT decides, not the brand. A product brings a packet size along from its
+   barcode, but whether that becomes kilograms or pieces is a property of the target: "passata"
+   counts jars even though every jar says 500 g. Read the other way round, a freshly scanned
+   product would be measured and the same product counted once assigned — the same number
+   would mean two things. Only a product without a requirement answers for itself. */
+function unitsOf(part) {
+  if (!part) return "";
+  /* ⚠️ A stock row carries only a PartBrief, and that has NO `variant_of`. Without the detour
+     through the catalogue a row would not find its requirement and would show "4.5 ×" instead
+     of "4.5 kg". */
+  const full = (part.pk != null && PARTS.get(part.pk)) || part;
+  if (full.variant_of) {
+    const tpl = PARTS.get(full.variant_of);
+    return (tpl && tpl.units) || "";
+  }
+  return full.units || "";
+}
+
+function packOf(part) {
+  const v = PACK.get(part && part.pk);
+  return isFinite(v) && v > 0 ? v : null;
+}
+
+// The reader's own notation, without the zeros nobody reads: 4,5 kg rather than 4,500 kg.
+function fmtNum(x) {
+  return (Number(x) || 0).toLocaleString(LOCALE, { maximumFractionDigits: 3 });
+}
+
+function fmtQty(x, units) {
+  return units ? fmtNum(x) + " " + unitLabel(units) : fmtNum(x) + " ×";
+}
+
+/* Counted articles keep the 1..100 list; measured ones get a number field, because half a sack
+   of rice is a valid amount and appears in no list of whole numbers. Both hand their value
+   over through `.value`, so callers need not know which one they got. */
+function qtyControl(part, current, selected) {
+  if (!unitsOf(part)) return qtySelect(current, selected);
+  const i = el("input", { type: "number", step: "0.01", min: "0" });
+  i.value = String(Number(selected != null ? selected : current) || 0);
+  return i;
+}
+
+/* A target in quarter steps, and not for looks.
+
+   ⚠️ InvenTree only accepts numbers for `minimum_stock` that are exact binary fractions: 9.5
+   is fine, 9.6 is refused with "no more than 6 decimal places" (checked live 2026-09-15). The
+   serializer sends the value through a float, where 9.6 is 9.5999…9964. Stock quantities are
+   NOT affected — they take 0.285 kg without complaint; it is only the target field.
+
+   Rounded up, not to nearest: in an emergency supply, too much is the smaller problem. */
+function roundTarget(x) {
+  const v = Number(x) || 0;
+  return Math.ceil(v * 4) / 4;
+}
+
+function qtyLabel(part, base) {
+  const u = unitsOf(part);
+  return u ? base + " (" + unitLabel(u) + ")" : base;
+}
+
+/* The pack content is stored on the product as soon as somebody has typed it — the next
+   purchase of the same brand finds it already filled in. If saving fails that is acceptable:
+   the booked amount is right regardless, only the pre-fill is missing. */
+async function savePack(part, value) {
+  if (!PACK_TPL || !(value > 0) || PACK.get(part.pk) === value) return;
+  try {
+    const pk = PACK_PARAM.get(part.pk);
+    if (pk) {
+      await api("/parameter/" + pk + "/", { method: "PATCH", body: { data: String(value) } });
+    } else {
+      const created = await api("/parameter/", {
+        method: "POST",
+        body: { model_type: "part", model_id: part.pk, template: PACK_TPL, data: String(value) },
+      });
+      PACK_PARAM.set(part.pk, created.pk);
+    }
+    PACK.set(part.pk, value);
+  } catch (e) { /* the stock amount is right regardless */ }
+}
+
+function locSelect(selected) {
+  const s = el("select");
+  for (const l of LOCATIONS) {
+    s.append(el("option", { value: String(l.pk), textContent: l.pathstring }));
+  }
+  if (selected) s.value = String(selected);
+  return s;
+}
+
+function isoInDays(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + (Number(days) || 0));
+  return d.toISOString().slice(0, 10);
+}
+
+function field(text, control) {
+  const w = el("div", { className: "field" });
+  w.append(el("label", { textContent: text }), control);
+  return w;
+}
+
+/* "in 3 days", "today", "3 days ago" — the remaining time in words, from the plural-aware
+   strings. Used wherever a date alone would not say whether it is soon. */
+function daysLeft(days) {
+  if (days === 0) return t("days.today");
+  return days < 0 ? t("days.ago", { n: -days }) : t("days.in", { n: days });
+}
+
+/* A date field that says, in the reader's language, what it is actually holding.
+
+   Chrome draws <input type=date> in the BROWSER's interface language, not the page's —
+   verified 2026-09-14 with Playwright: navigator.language was de-DE, Intl resolved to de-DE
+   and toLocaleDateString gave 13.9.2028, yet the control still rendered 09/13/2028. "09/13"
+   against "13/09" is indistinguishable for any day of the month up to 12, and this is a field
+   about food safety. So the resolved date is spelled out underneath, with the month as a
+   WORD — unambiguous in every language — together with the remaining shelf life, which is the
+   number you actually think in. */
+function dateField(labelText, value) {
+  const input = el("input", { type: "date" });
+  if (value) input.value = value;
+  const hint = el("div", { className: "hint" });
+  const draw = () => {
+    if (!input.value) { hint.textContent = t("date.none"); return; }
+    const days = Math.round((new Date(input.value) - new Date()) / 86400000);
+    const long = new Date(input.value).toLocaleDateString(LOCALE,
+      { day: "numeric", month: "long", year: "numeric" });
+    hint.textContent = long + " · " + (days < 0 ? t("date.expired") : daysLeft(days));
+  };
+  input.addEventListener("input", draw);
+  input.addEventListener("change", draw);
+  draw();
+  const wrap = field(labelText, input);
+  wrap.append(hint);
+  return { wrap: wrap, input: input };
+}
+
+/* Giving a part a picture. Open Food Facts covers the common groceries and nothing else —
+   own jars, regional products, anything non-food — so when no photo was found (or the found
+   one is wrong) you supply your own.
+
+   TWO file inputs, not one, and that is the whole point of this function's shape: `capture`
+   is the only way to make a browser go straight to the camera, but a single input carrying it
+   then offers ONLY the camera and no gallery. One input with `capture`, one without, behind
+   two labelled buttons, is the only arrangement where both paths are reliably available —
+   relying on the platform's chooser to offer both was the earlier design and on Android it
+   simply showed the gallery. */
+/* Read a JPEG's EXIF orientation AND its stored pixel size, in one pass over the header.
+
+   Both are needed, and the second one is the part that took a measurement to learn: browsers
+   apply the EXIF rotation themselves when decoding, and Chromium does so **even when asked
+   not to** — `createImageBitmap(file, {imageOrientation: "none"})` still returned 200×400 for
+   a 400×200 file tagged "rotate 90°" (verified 2026-09-15 against generated fixtures). A
+   transform applied on top of that turns the picture twice, which is exactly the 90°-out
+   thumbnails this replaced.
+
+   So we do not guess and we do not trust a flag: comparing the decoded bitmap against the
+   size actually stored in the file says whether the decoder already did the work.
+
+   Only the first APP1 segment is walked, and only the first IFD — that is where tag 0x0112
+   lives. Anything unexpected yields orientation 1, i.e. "leave it alone". */
+function jpegInfo(file) {
+  return new Promise((resolve) => {
+    const fallback = { orientation: 1, width: 0, height: 0 };
+    const fr = new FileReader();
+    fr.onerror = () => resolve(fallback);
+    fr.onload = () => {
+      const info = { orientation: 1, width: 0, height: 0 };
+      try {
+        const v = new DataView(fr.result);
+        if (v.getUint16(0) !== 0xffd8) return resolve(fallback);   // not a JPEG at all
+        let off = 2;
+        while (off + 4 <= v.byteLength) {
+          const marker = v.getUint16(off);
+          if ((marker & 0xff00) !== 0xff00) break;
+          const size = v.getUint16(off + 2);
+
+          if (marker === 0xffe1 && !info.orientation2) {
+            const start = off + 4;
+            if (v.getUint32(start) === 0x45786966) {               // "Exif"
+              const tiff = start + 6;
+              const little = v.getUint16(tiff) === 0x4949;
+              const ifd = tiff + v.getUint32(tiff + 4, little);
+              const count = v.getUint16(ifd, little);
+              for (let i = 0; i < count; i++) {
+                const entry = ifd + 2 + i * 12;
+                if (v.getUint16(entry, little) === 0x0112) {
+                  info.orientation = v.getUint16(entry + 8, little) || 1;
+                  break;
+                }
+              }
+            }
+          }
+
+          // SOF0..SOF15 carry the frame header; DHT/DRI/JPG share the 0xFFCx range and must
+          // not be mistaken for it.
+          const m = marker & 0xff;
+          if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+            info.height = v.getUint16(off + 5);
+            info.width = v.getUint16(off + 7);
+            break;                                                 // both known, stop
+          }
+          off += 2 + size;
+        }
+      } catch (e) { /* malformed header is not worth a failure */ }
+      resolve(info);
+    };
+    // The header is all that matters; never pull a 5 MB photo into memory for twelve bytes.
+    fr.readAsArrayBuffer(file.slice(0, 256 * 1024));
+  });
+}
+
+/* Does this browser apply EXIF orientation when it decodes an image?
+
+   It has to be measured, not assumed and not asked: Chromium applies the rotation even when
+   passed `imageOrientation: "none"` (verified 2026-09-15), so the flag lies, and applying our
+   own rotation on top produced thumbnails 90° out. Comparing stored size against decoded size
+   only answers it for quarter turns — a 180° file has the same dimensions either way, which is
+   how that case stayed broken one round longer.
+
+   So: decode a 2×1 pixel JPEG tagged "rotate 90°" once. If it comes back 1×2, the decoder
+   does the work and we must keep our hands off. Measured once per session and remembered. */
+let EXIF_AUTO = null;
+const EXIF_PROBE = "data:image/jpeg;base64,/9j/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAYAAAAAAAD/4AAQSkZJRgABAQAAAQABAAD/2wBDACgcHiMeGSgjISMtKygwPGRBPDc3PHtYXUlkkYCZlo+AjIqgtObDoKrarYqMyP/L2u71////m8H////6/+b9//j/2wBDASstLTw1PHZBQXb4pYyl+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj/wAARCAABAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCrRRRXOewf/9k=";
+
+async function decoderAppliesExif() {
+  if (EXIF_AUTO !== null) return EXIF_AUTO;
+  try {
+    const blob = await (await fetch(EXIF_PROBE)).blob();
+    const bmp = await createImageBitmap(blob);
+    EXIF_AUTO = bmp.width === 1 && bmp.height === 2;
+    if (bmp.close) bmp.close();
+  } catch (e) {
+    EXIF_AUTO = true;   // every current engine does; assuming so cannot double-rotate
+  }
+  return EXIF_AUTO;
+}
+
+/* Shrink, straighten and re-encode a picked photo before it is uploaded.
+
+   A phone camera hands over 3-5 MB at 4000×3000 for something this app shows at 96px, and
+   newer cameras hand over HEIC, which the server's Pillow refuses outright ("Upload a valid
+   image") — that failure looks to the user exactly like "taking a photo does nothing".
+   Drawing it through a canvas fixes both at once. Straightening has to happen here too,
+   because a canvas drops EXIF and the stored JPEG gets no second chance to be rotated.
+
+   The rotation is applied ONLY if the decoder did not already do it — see jpegInfo(). On every
+   current browser it has, and then this does nothing but scale.
+
+   Any failure falls through to the original file rather than blocking the upload: a browser
+   that cannot decode the format here probably could not have shown it either, and the server
+   gets the last word. */
+async function prepareImage(file) {
+  const MAX = 1600;
+  try {
+    const info = await jpegInfo(file);
+    const bmp = await createImageBitmap(file);
+
+    // If the decoder already straightened the picture, straightening it again turns it twice.
+    const orientation = (await decoderAppliesExif()) ? 1 : info.orientation;
+
+    const scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = orientation >= 5 ? h : w;
+    canvas.height = orientation >= 5 ? w : h;
+
+    const ctx = canvas.getContext("2d");
+    switch (orientation) {
+      case 2: ctx.translate(w, 0); ctx.scale(-1, 1); break;
+      case 3: ctx.translate(w, h); ctx.rotate(Math.PI); break;
+      case 4: ctx.translate(0, h); ctx.scale(1, -1); break;
+      case 5: ctx.rotate(0.5 * Math.PI); ctx.scale(1, -1); break;
+      case 6: ctx.rotate(0.5 * Math.PI); ctx.translate(0, -h); break;
+      case 7: ctx.rotate(0.5 * Math.PI); ctx.translate(w, -h); ctx.scale(-1, 1); break;
+      case 8: ctx.rotate(-0.5 * Math.PI); ctx.translate(-w, 0); break;
+      default: break;
+    }
+    ctx.drawImage(bmp, 0, 0, w, h);
+    if (bmp.close) bmp.close();
+
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+    if (blob && blob.size) return new File([blob], "foto.jpg", { type: "image/jpeg" });
+  } catch (e) {
+    console.warn("prepareImage fell back to the original file:", e);
+  }
+  return file;
+}
+
+function thumbPicker(part, onDone) {
+  const img = el("img", { className: "thumb", alt: "", hidden: true });
+  const ph = el("div", { className: "thumb empty", textContent: t("photo.placeholder") });
+
+  const upload = async (input) => {
+    const f = input.files && input.files[0];
+    input.value = "";          // so picking the same file twice fires change again
+    if (!f) return;            // the user backed out of the camera
+
+    toast(t("photo.saving"));
+    const prepared = await prepareImage(f);
+    const fd = new FormData();
+    fd.append("image", prepared, prepared.name || "foto.jpg");
+    try {
+      await api("/part/" + part.pk + "/", { method: "PATCH", body: fd });
+      IMG_CACHE.clear();
+      toast(t("photo.saved"));
+      onDone();
+    } catch (e) {
+      toast(t("photo.failed", { error: e.message }), true);
+    }
+  };
+
+  const gallery = el("input", { type: "file", accept: "image/*" });
+  gallery.hidden = true;
+  gallery.onchange = () => upload(gallery);
+
+  const camera = el("input", { type: "file", accept: "image/*" });
+  camera.setAttribute("capture", "environment");
+  camera.hidden = true;
+  camera.onchange = () => upload(camera);
+
+  const pick = () => gallery.click();
+  const shoot = () => camera.click();
+  // An existing picture opens large; an empty frame goes straight to the camera. Tapping where
+  // a photo is missing means "take one" far more often than "let me browse my gallery", and
+  // the gallery is still one button away underneath.
+  img.onclick = () => lightbox(img.src, part.full_name || part.name);
+  img.title = t("photo.enlarge");
+  ph.onclick = shoot;
+  ph.title = t("photo.take");
+
+  const wrap = el("div", { className: "thumbwrap" });
+  wrap.append(img, ph, gallery, camera);
+  return { wrap: wrap, img: img, ph: ph, pick: pick, shoot: shoot };
+}
+
+/* Full-screen view of the picture. Deliberately trivial: an overlay, the image, and any tap
+   or Escape closes it. It reuses the object URL the thumbnail already holds, so opening it
+   costs no request. */
+function lightbox(src, alt) {
+  if (!src) return;
+  const box = el("div", { className: "lightbox" });
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", alt || t("photo.image"));
+
+  const big = el("img", { src: src, alt: alt || "" });
+  const close = el("button", { className: "btn ghost iconbtn lbclose" });
+  close.setAttribute("aria-label", t("common.close"));
+  close.innerHTML = icon("close", 24);
+
+  const shut = () => {
+    box.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  function onKey(e) { if (e.key === "Escape") shut(); }
+
+  box.onclick = shut;
+  close.onclick = shut;
+  document.addEventListener("keydown", onKey);
+
+  box.append(close, big);
+  document.body.append(box);
+}
+
+function openPanel(host, build, auto) {
+  closePanel();
+  PANEL_AUTO = !!auto;
+  PANEL = el("div", { className: "panel" });
+  build(PANEL);
+  host.append(PANEL);
+  revealPanel(PANEL);
+}
+
+/* Put an opened form's top just under the sticky header.
+
+   `scrollIntoView({block:"nearest"})` fell short twice over: it does nothing when the element
+   is already *technically* on screen — including when it sits behind the sticky header — and
+   when it does move, it moves as little as possible, which on a tall form leaves the buttons
+   below the fold. Computing the offset puts the whole form where it can be read and reached.
+   Instantly, not smoothly: a form still gliding under a thumb is a mis-tap waiting to happen. */
+function revealPanel(panel) {
+  if (!panel.getBoundingClientRect) return;
+  const header = document.querySelector("header");
+  const headerH = header ? header.getBoundingClientRect().height : 0;
+  const delta = panel.getBoundingClientRect().top - headerH - 12;
+  if (Math.abs(delta) > 2) window.scrollBy(0, delta);
+}
+
+function closePanel() {
+  if (PANEL) { PANEL.remove(); PANEL = null; }
+  PANEL_AUTO = false;
+}
+
+function panelButtons(panel, okText, onOk, danger) {
+  const ok = el("button", { className: "btn " + (danger ? "danger" : "primary"),
+                            textContent: okText });
+  const no = el("button", { className: "btn ghost", textContent: t("common.cancel") });
+  no.onclick = closePanel;
+  ok.onclick = async () => {
+    ok.disabled = true;
+    try { await onOk(); } catch (e) { toast(e.message, true); ok.disabled = false; }
+  };
+  const r = el("div", { className: "buttons" });
+  r.append(ok, no);
+  panel.append(r);
+}
+
+async function loadStock(pk) {
+  const stock = await api("/stock/?part=" + pk + "&in_stock=true&limit=100");
+  return (stock.results || stock || []).slice()
+    .sort((a, b) => ((a.expiry_date || "9999") < (b.expiry_date || "9999") ? -1 : 1));
+}
+
+/* Which article is on screen, and which ones we walked through to get here.
+
+   Detail pages link to each other: a requirement lists its varieties, a product suggests
+   requirements it might belong to. Before this, all of them came back to the TAB, so opening a
+   variety from "Nudeln" and going back landed in the shopping list rather than in "Nudeln" —
+   one step out of the way instead of one step back. */
+let DETAIL_PK = null;
+const DETAIL_STACK = [];
+const DETAIL_STACK_MAX = 10;      // deep enough for any real path, shallow enough to stay sane
+
+/* Open an article's detail page.
+
+   `from` is a TAB ("stock", "buy", …) when the page is entered from a list — that starts a
+   fresh path. It is "detail" when one article opens another, which pushes the current one onto
+   the stack. Without it we are walking back out and neither is touched. */
+function openPart(pk, from, opts) {
+  /* One history entry per opened page, created from the click itself.
+
+     ⚠️ Everything used to hang off ONE spare entry that the popstate handler kept pushing
+     back. That broke as soon as the button on the page was used: it navigated without spending
+     an entry, the stack got out of step by one, and the next Android gesture fell out of the
+     app instead of back into the list. The rule now: going forward creates an entry, going
+     back spends exactly one. */
+  if (!(opts && opts.noHistory)) armHistory();
+  if (from === "detail") {
+    if (DETAIL_PK != null && DETAIL_PK !== pk) {
+      DETAIL_STACK.push(DETAIL_PK);
+      if (DETAIL_STACK.length > DETAIL_STACK_MAX) DETAIL_STACK.shift();
+    }
+  } else if (from) {
+    DETAIL_STACK.length = 0;
+    DETAIL_FROM = from;
+  }
+  DETAIL_PK = pk;
+  LAST_OPENED = pk;
+  showTab("detail");
+  saveView("detail", pk);
+  const back = $("#detailback");
+  back.innerHTML = "";
+  const bi = el("span", { className: "ic" });
+  bi.innerHTML = icon("back");
+  const prev = DETAIL_STACK.length ? PARTS.get(DETAIL_STACK[DETAIL_STACK.length - 1]) : null;
+  back.append(bi, el("span", {
+    // Naming the article you came from is the whole point: "Back" alone left it open whether
+    // the button leads one step back or all the way out to the list.
+    textContent: prev ? t("nav.backTo", { name: prev.name || prev.full_name })
+               : DETAIL_FROM === "stock" ? t("nav.backToStock") : t("nav.back"),
+  }));
+  return showPart(pk);
+}
+
+/* One step back: to the article we came from, or out to the list when there is none. The system
+   back gesture and the button on the page both end up here, so they cannot disagree. */
+/* Called ONLY from the popstate handler — the entry has already been spent at this point, so
+   going back creates no new one. The button on the page calls `history.back()` and lands here,
+   rather than being a second kind of navigation that could disagree with the gesture. */
+function detailBack() {
+  const prev = DETAIL_STACK.pop();
+  if (prev != null) { openPart(prev, null, { noHistory: true }); return; }
+  DETAIL_PK = null;
+  showTab(DETAIL_FROM);
+}
+
+/* The detail page: everything known about one article, and the only place it can be changed.
+   The overview deliberately carries no controls — it is a list to read at arm's length while
+   standing at a shelf, and a row full of buttons is a row you mis-tap. */
+/* ---------------- matching a scanned product to what is already here ----------------
+
+   No embeddings, no vector store, and that is a considered choice rather than a shortcut.
+   Three signals are already in the data, and together they decide almost every case:
+
+     1. CATEGORY. Open Food Facts returns the product's category on a scan and the OFF plugin
+        already maps it onto our own tree. A requirement lives in a category, so this alone
+        cuts 83 candidates down to the handful in that category — before anything is computed.
+     2. WORDS, with compounds in mind. "Mehl" is literally contained in "Dinkelmehl", "面粉"
+        in "高筋面粉". A substring test over normalised words catches what a synonym model would
+        be asked for, for the words that actually occur on packaging. The words come from
+        words() above, which knows that Chinese is written without spaces.
+     3. WHAT YOU DID BEFORE. If a product in the same category already hangs under a
+        requirement, the next one of that kind probably belongs there too. Nearest neighbour
+        over a feature we have, without calling it that.
+
+   An embedding model would add a dependency (a service, or a model on a phone in a shop with
+   one bar of signal) to rank a list the category has already narrowed to five. The honest
+   place for semantics, if it is ever needed, is the OFF plugin on the server — not the
+   handset. And every suggestion here is one tap away from being corrected, which is the part
+   that makes a cheap heuristic acceptable where a wrong answer is cheap. */
+
+function suggestRequirements(name, categoryPk) {
+  const own = words(name);
+  const plain = String(name || "").toLowerCase();
+  if (!own.length) return [];
+
+  // How often an already-assigned product of this category chose a given requirement.
+  const habit = new Map();
+  for (const p of PARTS.values()) {
+    if (p.is_template || !p.variant_of) continue;
+    if (categoryPk && p.category !== categoryPk) continue;
+    habit.set(p.variant_of, (habit.get(p.variant_of) || 0) + 1);
+  }
+
+  const out = [];
+  for (const tpl of PARTS.values()) {
+    if (!tpl.is_template) continue;
+
+    let wordScore = 0;
+    const why = [];
+    for (const w of words(tpl.name)) {
+      if (!strongWord(w)) continue;
+      if (own.indexOf(w) >= 0) { wordScore += 4; why.push(t("suggest.word", { word: w })); }
+      else if (plain.indexOf(w) >= 0) {
+        wordScore += 3; why.push(t("suggest.inName", { word: w }));
+      }
+    }
+
+    const sameCat = !!(categoryPk && tpl.category === categoryPk);
+    if (!wordScore && !sameCat) continue;
+    out.push({ t: tpl, wordScore: wordScore, sameCat: sameCat, habit: habit.get(tpl.pk) || 0,
+               why: why.slice(0, 2).join(", ") || t("suggest.sameCategory") });
+  }
+
+  /* Ranked in tiers, not summed, and that distinction had to be learned twice. As a plain sum
+     "same category" (+5) beat a matching word (+4), so "Erdbeer Marmelade" was offered
+     "Backpulver" while "Marmelade / Konfitüre" sat one rank below. Dropping the category instead
+     was worse still: "Cashewkerne" shares no word with "Nüsse", and seven products lost their only
+     usable hint. So the word decides the order and the category decides ties — and still carries a
+     candidate on its own when no word matches at all. Matching shared compound tails ("Speiseöl"
+     from "Olivenöl") was tried and reverted: German plurals end in "-en", so "Tomaten" matched
+     "Linsen" and "Kerne" matched "Damenhygiene" — more noise than the two cases it fixed. */
+  return out
+    .sort((a, b) => (b.wordScore - a.wordScore)
+                 || ((b.sameCat ? 1 : 0) - (a.sameCat ? 1 : 0))
+                 || (b.habit - a.habit))
+    .slice(0, 3);
+}
+
+/* Products that look like the same thing. Scanning a second packet of something you already
+   have should offer to book onto it rather than quietly create a twin — the duplicate is only
+   noticed later, when the counts do not add up. */
+function similarProducts(name, excludePk) {
+  const own = words(name).filter(strongWord);
+  if (!own.length) return [];
+
+  const out = [];
+  for (const p of PARTS.values()) {
+    if (p.is_template || p.pk === excludePk) continue;
+    const plain = String(p.name || "").toLowerCase();
+    let hits = 0;
+    for (const w of own) if (plain.indexOf(w) >= 0) hits += 1;
+    if (hits >= 2 || (hits === 1 && own.length === 1)) out.push({ p: p, hits: hits });
+  }
+  return out.sort((a, b) => b.hits - a.hits).slice(0, 3);
+}
+
+/* Create a product from a barcode nothing recognised, and bind the barcode to it in the same
+   go. Two calls, and the order matters the usual way: the part is created first, so a failure
+   to link leaves an article you can find and fix rather than a barcode pointing at nothing. */
+function panelNewArticle(host, code) {
+  openPanel(host, (p) => {
+    const name = el("input", { type: "text" });
+    name.placeholder = t("article.namePlaceholder");
+
+    const cat = el("select");
+    for (const c of CATEGORIES) {
+      cat.append(el("option", { value: String(c.pk), textContent: c.pathstring }));
+    }
+
+    const req = el("select");
+    req.append(el("option", { value: "", textContent: t("requirement.none") }));
+    for (const tpl of [...PARTS.values()].filter((x) => x.is_template)
+                     .sort((a, b) => byName(a.name, b.name))) {
+      req.append(el("option", { value: String(tpl.pk), textContent: tpl.full_name || tpl.name }));
+    }
+
+    const sugBox = el("div", { className: "suggest" });
+    const simBox = el("div", { className: "hint" });
+
+    /* Recomputed while typing, because for a barcode nothing recognised the name is the only
+       signal there is — there is no category from Open Food Facts to narrow by. */
+    const refresh = () => {
+      sugBox.innerHTML = "";
+      for (const cand of suggestRequirements(name.value, Number(cat.value))) {
+        const btn = el("button", {
+          className: "btn", textContent: cand.t.full_name || cand.t.name,
+        });
+        btn.title = cand.why;
+        btn.onclick = () => { req.value = String(cand.t.pk); refresh(); };
+        sugBox.append(btn);
+      }
+      const sim = similarProducts(name.value, null);
+      simBox.textContent = sim.length
+        ? t("article.similarExists", { names: sim.map((c) => c.p.full_name || c.p.name).join(", ") })
+        : "";
+      simBox.hidden = !sim.length;
+    };
+    name.addEventListener("input", refresh);
+    cat.addEventListener("change", refresh);
+
+    p.append(field(t("field.name"), name), field(t("field.category"), cat));
+    p.append(sugBox, simBox);
+    p.append(field(t("field.requirementOptional"), req));
+    p.append(el("div", { className: "hint", textContent: t("article.barcode", { code: code }) }));
+    refresh();
+
+    panelButtons(p, t("common.create"), async () => {
+      if (!name.value.trim()) { toast(t("error.nameMissing"), true); return; }
+      const created = await api("/part/", {
+        method: "POST",
+        body: {
+          name: name.value.trim(), description: "", category: Number(cat.value),
+          variant_of: req.value ? Number(req.value) : null,
+          purchaseable: true, active: true, minimum_stock: 0,
+        },
+      });
+      PARTS.set(created.pk, created);
+      try {
+        await api("/barcode/link/", {
+          method: "POST", body: { barcode: code, part: created.pk },
+        });
+      } catch (e) {
+        toast(t("article.linkFailed", { error: e.message }), true);
+      }
+      $("#ean").value = "";
+      toast(t("article.createdLinked"));
+      openPart(created.pk, "scan");
+    });
+  });
+}
+
+async function showPart(pk) {
+  closePanel();
+  const gen = ++CARD_GEN;
+  const host = $("#detail");
+
+  /* Clear first. The detail view keeps its DOM while hidden, so without this the previous
+     article stays on screen until the new data lands — briefly showing someone the wrong
+     stock. In its place goes what the overview already knows (the name), so the page has an
+     identity straight away instead of flashing empty. */
+  host.innerHTML = "";
+  const known = STOCK_ALL.find((i) => i.part === pk);
+  if (known && known.part_detail) {
+    const skel = el("div", { className: "card" });
+    skel.append(el("h2", { className: "sec", textContent: t("detail.general") }));
+    skel.append(el("div", { className: "name", textContent: known.part_detail.full_name }));
+    skel.append(el("div", { className: "hint", textContent: t("common.loading") }));
+    host.append(skel);
+  }
+
+  // In series these cost the sum of both round trips for no reason — neither needs the other.
+  const [part, items] = await Promise.all([api("/part/" + pk + "/"), loadStock(pk)]);
+  if (gen !== CARD_GEN) return;   // another article was opened while this one was loading
+  host.innerHTML = "";
+
+  // ---- identity + picture ----
+  /* Declared here, before the first use. It used to sit down with the facts, which put the
+     picture block above its own declaration — valid syntax, dead page: a `const` read before
+     its line throws rather than being undefined. */
+  const isRequirement = !!part.is_template;
+
+  const c = el("div", { className: "card" });
+  c.append(el("h2", { className: "sec", textContent: t("detail.general") }));
+  const head = el("div", { className: "detailhead" });
+  /* Only a product gets a picture. A requirement is the abstract thing you shop for — there is
+     no photograph of "Nudeln", and an empty frame only invites filling it with whichever brand
+     happened to be in the cupboard. The photos belong to the varieties, and that is where they
+     earn their place: recognising the one in the blue bag. */
+  const thumb = isRequirement ? null : thumbPicker(part, () => showPart(pk));
+  if (thumb) head.append(thumb.wrap);
+
+  const txt = el("div", { className: "grow" });
+  txt.append(el("div", { className: "name", textContent: part.full_name || part.name }));
+  if (part.category_name) {
+    txt.append(el("div", { className: "meta", textContent: part.category_name }));
+  }
+  if ((part.keywords || "").trim()) {
+    txt.append(el("div", { className: "meta", textContent: part.keywords }));
+  }
+  head.append(txt);
+  head.append(pencilButton(t("article.edit"), () => panelArticle(c, part, items)));
+  head.append(trashButton(part.is_template ? t("requirement.delete") : t("article.delete"),
+                          () => panelDeletePart(c, part, items)));
+  c.append(head);
+
+  if (thumb) {
+    const shoot = labelButton("ghost", "camera", t("photo.take"));
+    const choose = labelButton("ghost", "image", part.image ? t("photo.change") : t("photo.choose"));
+    shoot.onclick = thumb.shoot;
+    choose.onclick = thumb.pick;
+    const picks = el("div", { className: "buttons" });
+    picks.append(shoot, choose);
+    c.append(picks);
+
+    // Kick the picture off without awaiting it: the page must not wait on /media/.
+    const gotPicture = (ok) => { if (ok) thumb.ph.hidden = true; };
+    if (part.image) authImage(thumb.img, part.image).then(gotPicture);
+    else pollImage(part.pk, thumb.img, gen).then(gotPicture);
+  }
+
+  // ---- the numbers, in one readable block ----
+  const facts = el("div", { className: "facts" });
+  const fact = (k, v) => {
+    const d = el("div");
+    d.append(el("span", { className: "k", textContent: k }),
+             el("span", { className: "v", textContent: v }));
+    facts.append(d);
+  };
+  const have = isRequirement ? Number(part.total_in_stock || 0) : Number(part.in_stock || 0);
+  const target = Number(part.minimum_stock || 0);
+
+  if (isRequirement) {
+    fact(t("detail.kind"), t("detail.kindRequirement"));
+  } else {
+    const bn = part.variant_of ? ((PARTS.get(part.variant_of) || {}).full_name
+                                  || (PARTS.get(part.variant_of) || {}).name) : null;
+    fact(t("field.requirement"), bn || t("detail.unassigned"));
+  }
+
+  const unit = unitsOf(part);
+  fact(isRequirement ? t("detail.stockAllProducts") : t("detail.stockTotal"), fmtQty(have, unit));
+  // For measured articles the pack content is the number everything else comes from — it
+  // belongs where the stock is shown.
+  if (unit && !isRequirement && packOf(part) != null) {
+    fact(t("field.packContent"), fmtQty(packOf(part), unit));
+  }
+  // Only worth a line when a target was actually set — an article nobody stocks deliberately
+  // should not be shown a deviation of zero against nothing.
+  if (target) {
+    fact(t("field.target"), fmtQty(target, unit));
+    const diff = Math.round((have - target) * 1000) / 1000;
+    const d = el("div");
+    d.append(el("span", { className: "k", textContent: t("detail.deviation") }));
+    const shown = (diff > 0 ? "+" : "") + fmtQty(diff, unit);
+    d.append(el("span", {
+      className: "v " + (diff < 0 ? "short" : "fine"),
+      textContent: diff < 0 ? t("detail.deviationShort", { amount: shown }) : shown,
+    }));
+    facts.append(d);
+  }
+  fact(t("detail.batches"), fmtNum(items.length));
+  // ONE location line. An earlier version showed both where the stock lies and what the
+  // booking form would suggest — technically two different things, and a distinction nobody
+  // asked for: it read as the overview contradicting the detail page. There is now one
+  // "location", it means where the stuff is, and setting it moves the stock.
+  const where = [...new Set(items.map((i) => locName(i.location)))];
+  fact(t("field.location"), where.length ? where.join(", ")
+                 : (part.default_location ? locName(part.default_location) : "—"));
+  if (part.default_expiry) {
+    fact(t("detail.defaultExpiry"), t("days.count", { n: part.default_expiry }));
+  }
+  if ((part.description || "").trim() && part.description !== part.name) {
+    fact(t("field.description"), part.description);
+  }
+  c.append(facts);
+  host.append(c);
+
+  /* A product that belongs to no requirement yet is the state a scan leaves behind, and it is
+     the moment the answer is easiest: the name and the category are right there. Offered, not
+     applied — a wrong guess silently written into the data would be worse than no guess. */
+  if (!isRequirement && !part.variant_of) {
+    const sug = suggestRequirements(part.name, part.category);
+    const sim = similarProducts(part.name, part.pk);
+
+    if (sug.length || sim.length) {
+      const sc = el("div", { className: "card" });
+      sc.append(el("h2", { className: "sec", textContent: t("suggest.heading") }));
+
+      if (sug.length) {
+        sc.append(el("div", {
+          className: "hint",
+          textContent: t("suggest.unassigned") + " " + t("suggest.pickOne"),
+        }));
+        const row = el("div", { className: "suggest" });
+        for (const cand of sug) {
+          const btn = el("button", {
+            className: "btn", textContent: cand.t.full_name || cand.t.name,
+          });
+          btn.title = cand.why;
+          btn.onclick = async () => {
+            btn.disabled = true;
+            try {
+              await api("/part/" + part.pk + "/", {
+                method: "PATCH", body: { variant_of: cand.t.pk, minimum_stock: 0 },
+              });
+              PARTS.set(part.pk, Object.assign({}, part, { variant_of: cand.t.pk }));
+              toast(t("suggest.assigned", { name: cand.t.full_name || cand.t.name }));
+              showPart(part.pk);
+            } catch (e) { toast(e.message, true); btn.disabled = false; }
+          };
+          row.append(btn);
+        }
+        sc.append(row);
+      }
+
+      if (sim.length) {
+        sc.append(el("div", {
+          className: "hint",
+          textContent: (sug.length ? "" : t("suggest.unassigned") + " ")
+                     + t("suggest.similar"),
+        }));
+        for (const cand of sim) {
+          const row = el("button", { className: "btn ghost buyrow" });
+          const who = el("div", { className: "grow" });
+          who.append(el("div", { textContent: cand.p.full_name || cand.p.name }));
+          who.append(el("div", {
+            className: "meta",
+            textContent: t("stock.have", { amount: fmtQty(Number(cand.p.in_stock || 0), unitsOf(cand.p)) })
+                       + (cand.p.variant_of ? " · " + (requirementName(cand.p.pk) || "") : ""),
+          }));
+          row.append(who);
+          const chev = el("div", { className: "chev" });
+          chev.innerHTML = icon("chevron", 24);
+          row.append(chev);
+          row.onclick = () => openPart(cand.p.pk, "detail");
+          sc.append(row);
+        }
+      }
+
+      host.append(sc);
+    }
+  }
+
+  // ---- every batch of this article, each with its own date ----
+  const bc = el("div", { className: "card" });
+  bc.append(el("h2", { className: "sec", textContent: t("detail.batches") }));
+  const ul = el("ul", { className: "stock" });
+  if (!items.length) {
+    ul.append(el("li", { textContent: t("stock.emptyAll") }));
+  }
+  for (const it of items) {
+    const li = el("li");
+    li.append(el("div", { className: "qty", textContent: fmtQty(it.quantity, unitsOf(part)) }));
+    li.append(el("div", { className: "meta", textContent: locName(it.location) }));
+    // Panels anchor to the row, so a form always opens under what it edits.
+    li.append(rowFoot(it,
+      () => panelBatch(li, part, it, () => showPart(part.pk)),
+      () => panelDelete(li, it, () => showPart(part.pk))));
+    ul.append(li);
+  }
+  bc.append(ul);
+
+  /* A requirement lists the products that serve it — and that is the ONLY place some of them can
+     be reached: a variety you know but do not currently own has no stock row (so it is absent
+     from the stock tab) and is not itself a requirement (so it is absent from the shopping list).
+     Without this, buying a brand once and running out would make it disappear for good. */
+  if (isRequirement) {
+    const kids = [...PARTS.values()]
+      .filter((x) => x.variant_of === part.pk)
+      .sort((a, b) => byName(a.name, b.name));
+
+    const kc = el("div", { className: "card" });
+    kc.append(el("h2", { className: "sec", textContent: t("detail.varieties") }));
+
+    if (!kids.length) {
+      kc.append(el("div", { className: "hint", textContent: t("detail.noVarieties") }));
+    }
+    for (const k of kids) {
+      const row = el("button", { className: "btn ghost buyrow" });
+
+      const name = k.full_name || k.name;
+      const mini = el("img", { className: "mini", alt: "", hidden: true });
+      const miniPh = el("div", {
+        className: "mini empty", textContent: (name[0] || "?").toUpperCase(),
+      });
+      row.append(mini, miniPh);
+      // ⚠️ `thumbnail` is never empty — InvenTree substitutes its own blank graphic for a part
+      // without a picture. `image` is the honest field, so it decides whether there is one.
+      const src = k.image ? (k.thumbnail || k.image) : null;
+      if (src) authImage(mini, src).then((ok) => { if (ok) miniPh.hidden = true; });
+
+      const who = el("div", { className: "grow" });
+      who.append(el("div", { textContent: name }));
+      const have = Number(k.in_stock || 0);
+      who.append(el("div", {
+        className: "meta",
+        textContent: have ? t("stock.have", { amount: fmtQty(have, unitsOf(k)) }) : t("stock.outOfStock"),
+      }));
+      row.append(who);
+      const chev = el("div", { className: "chev" });
+      chev.innerHTML = icon("chevron", 24);
+      row.append(chev);
+      row.onclick = () => openPart(k.pk, "detail");
+      row.dataset.pk = String(k.pk);
+      kc.append(row);
+    }
+    host.append(kc);
+  }
+
+  const acts = el("div", { className: "actions" });
+  const bIn = labelButton("primary", "plus", t("action.bought"));
+  const bOut = labelButton("", "minus", t("action.used"));
+  const bCnt = labelButton("ghost", "check", t("action.counted"));
+  bIn.onclick = () => panelBookIn(bc, part, items);
+  bOut.onclick = () => panelAdjust(bc, part, items, "remove");
+  bCnt.onclick = () => panelAdjust(bc, part, items, "count");
+  acts.append(bIn, bOut, bCnt);
+  bc.append(acts);
+  host.append(bc);
+
+  /* A product that was just discovered has no stock by definition, and the only reason to
+     scan it then is to put it away — so that form opens unasked. NOT for a requirement: one
+     never holds stock of its own, so the condition was true every single time and every
+     requirement opened with a booking form over it. */
+  if (!items.length && !isRequirement) panelBookIn(bc, part, items, true);
+}
+
+function panelBookIn(card, part, items, auto) {
+  openPanel(card, (p) => {
+    const u = unitsOf(part);
+    const qty = qtySelect(null, 1);          // packets when measured, pieces when counted
+    /* The crisis shelf first, always. Putting things away there is the normal case; the
+       kitchen is the exception you pick deliberately. The part's own default and an existing
+       batch's place are only fallbacks for a house that has no such shelf. */
+    const preferred =
+      (LOCATIONS.find((l) => l.pathstring === BOOK_LOCATION
+                          || l.name === BOOK_LOCATION) || {}).pk
+      || part.default_location || (items[0] && items[0].location)
+      || (LOCATIONS.find((l) => l.name === DEFAULT_LOCATION) || {}).pk;
+    const loc = locSelect(preferred);
+    // Pre-filled from the part's own default_expiry, i.e. from the category table. The common
+    // case is therefore "leave it", and correcting it is still one tap.
+    const mhd = dateField(t("field.bestBefore"),
+                          part.default_expiry ? isoInDays(part.default_expiry) : "");
+
+    /* The content is its own field even when it is known. It is the number the whole
+       measurement hangs on, and Open Food Facts is regularly wrong for bulk packs — this is where
+       you correct it, at the moment you are holding the packet. */
+    let content = null;
+    if (u) {
+      content = el("input", { type: "number", step: "0.001", min: "0" });
+      const known = packOf(part);
+      if (known != null) content.value = String(known);
+      const sum = el("div", { className: "hint" });
+      const recalc = () => {
+        const c = Number(content.value);
+        sum.textContent = c > 0
+          ? fmtNum(qty.value) + " × " + fmtQty(c, u) + " = " + fmtQty(Number(qty.value) * c, u)
+          : t("book.packQuestion");
+      };
+      qty.onchange = recalc;
+      content.oninput = recalc;
+      recalc();
+      p.append(field(t("field.packets"), qty),
+               field(t("field.packContent") + " (" + unitLabel(u) + ")", content), sum);
+    } else {
+      p.append(field(t("field.quantity"), qty));
+    }
+    p.append(field(t("field.location"), loc), mhd.wrap);
+    panelButtons(p, t("book.confirm"), async () => {
+      const perPack = u ? Number(content.value) : 0;
+      if (u && !(perPack > 0)) return toast(t("book.packMissing"), true);
+      const amount = u ? Number(qty.value) * perPack : Number(qty.value);
+      const locPk = Number(loc.value);
+      const want = mhd.input.value || null;
+      // Only merge into an existing row when the date matches too. Adding a fresh jar to a
+      // batch with a different MHD would quietly destroy the older date, which is the one
+      // piece of information this whole app exists to keep.
+      const same = items.find((i) => i.location === locPk
+                    && (i.expiry_date || null) === want);
+      if (same) {
+        await api("/stock/add/", {
+          method: "POST",
+          body: { items: [{ pk: same.pk, quantity: amount }], notes: t("stock.note") },
+        });
+      } else {
+        const body = { part: part.pk, quantity: amount, location: locPk };
+        if (want) body.expiry_date = want;
+        await api("/stock/", { method: "POST", body: body });
+      }
+      if (u) await savePack(part, perPack);
+      toast(t("book.done", { amount: fmtQty(amount, u) }));
+      /* The scan field still holds the barcode that got us here. Leaving it there means the
+         next scan types into a field that already has something in it, and a mis-scan silently
+         looks up the previous article again. Booked in = that barcode is dealt with. */
+      const ean = $("#ean");
+      if (ean) ean.value = "";
+      showPart(part.pk);
+    });
+  }, auto);
+}
+
+function panelAdjust(card, part, items, kind) {
+  if (!items.length) return toast(t("stock.none"), true);
+  const counting = kind === "count";
+  openPanel(card, (p) => {
+    const pick = el("select");
+    items.forEach((i, idx) => pick.append(el("option", {
+      value: String(idx),
+      textContent: fmtQty(i.quantity, unitsOf(part)) + " · " + locName(i.location)
+                 + (i.expiry_date ? " · " + fmtDate(i.expiry_date) : ""),
+    })));
+
+    // The quantity dropdown depends on which batch is selected (counting defaults to what is
+    // recorded there), so it is rebuilt rather than merely re-valued.
+    const qtyBox = el("div");
+    const drawQty = () => {
+      const it = items[Number(pick.value)];
+      qtyBox.innerHTML = "";
+      qtyBox.append(field(qtyLabel(part, counting ? t("count.actual") : t("field.quantity")),
+                          qtyControl(part, it.quantity, counting ? it.quantity : 1)));
+    };
+    pick.onchange = drawQty;
+
+    if (items.length > 1) p.append(field(t("field.batch"), pick));
+    p.append(qtyBox);
+    drawQty();
+
+    panelButtons(p, counting ? t("count.confirm") : t("use.confirm"), async () => {
+      const it = items[Number(pick.value)];
+      // A select for counted articles, an input for measured ones — both carry .value.
+      const qty = qtyBox.querySelector("select, input").value;
+      await api("/stock/" + kind + "/", {
+        method: "POST",
+        body: { items: [{ pk: it.pk, quantity: qty }], notes: t("stock.note") },
+      });
+      const amount = fmtQty(qty, unitsOf(part));
+      toast(counting ? t("count.done", { amount: amount }) : t("use.done", { amount: amount }));
+      showPart(part.pk);
+    });
+  });
+}
+
+/* One batch, edited as a whole: how many are there, and until when do they keep. Splitting
+   off part of it under a different date is the secondary path below. */
+function panelBatch(host, part, item, after) {
+  openPanel(host, (p) => {
+    p.append(el("div", {
+      className: "hint",
+      textContent: fmtQty(item.quantity, unitsOf(part)) + " · " + locName(item.location),
+    }));
+    const qty = qtyControl(part, item.quantity, item.quantity);
+    const loc = locSelect(item.location);
+    const mhd = dateField(t("field.bestBefore"), item.expiry_date || "");
+    p.append(field(qtyLabel(part, t("field.quantity")), qty), field(t("field.location"), loc), mhd.wrap);
+
+    panelButtons(p, t("common.save"), async () => {
+      if (Number(loc.value) !== Number(item.location)) {
+        await api("/stock/transfer/", {
+          method: "POST",
+          body: {
+            items: [{ pk: item.pk, quantity: item.quantity }],
+            location: Number(loc.value),
+            notes: t("stock.note"),
+          },
+        });
+      }
+      if (Number(qty.value) !== Number(item.quantity)) {
+        await api("/stock/count/", {
+          method: "POST",
+          body: { items: [{ pk: item.pk, quantity: qty.value }], notes: t("stock.note") },
+        });
+      }
+      if ((item.expiry_date || "") !== (mhd.input.value || "")) {
+        await api("/stock/" + item.pk + "/", {
+          method: "PATCH", body: { expiry_date: mhd.input.value || null },
+        });
+      }
+      toast(t("common.saved"));
+      after();
+    });
+
+    // Nothing to split off a single unit.
+    if (Number(item.quantity) > 1) {
+      const sp = el("button", { className: "btn ghost", textContent: t("split.open") });
+      sp.style.marginTop = "8px";
+      sp.onclick = () => panelSplit(host, part, item, after);
+      p.append(sp);
+    }
+  });
+}
+
+/* Article-level edits: what it is, and where it lives.
+
+   "location" here does the obvious thing rather than the technically precise one: it MOVES the
+   stock (`/api/stock/transfer/`) and sets the article's default in the same breath, so the
+   place shown is the place things are and the next booking lands there too. Splitting those
+   into two fields was the earlier design and it only produced the question "what is the
+   difference" — correctly, because for a pantry there is none worth carrying.
+
+   Per-batch precision still exists in the batch editor, for the case where four jars really
+   are in the cellar and two in the kitchen. */
+function panelArticle(host, part, items) {
+  openPanel(host, (p) => {
+    /* The name is editable because the packet size lives in it — "Apfelmus (700 g)" is a
+       guess at a shelf, and the day it turns out to be a 1-kg tub both the name and the target
+       want correcting. Keeping that behind the admin UI would mean the list ossifies at
+       whatever I assumed when I wrote it. */
+    const name = el("input", { type: "text", value: part.name || "" });
+    name.placeholder = t("field.name");
+
+    const desc = el("input", { type: "text", value: part.description || "" });
+    desc.placeholder = t("article.descPlaceholder");
+
+    const unit = unitsOf(part);
+    const targetInput = el("input", { type: "number",
+                               value: Number(part.minimum_stock || 0) || "" });
+    targetInput.min = "0";
+    targetInput.step = unit ? "0.25" : "1";
+    if (!unit) targetInput.inputMode = "numeric";
+    targetInput.placeholder = t("article.targetPlaceholder");
+
+    /* The unit belongs to the requirement, not the brand: measuring happens where the target
+       is. Changing it here does NOT convert the stock — whoever turns pieces into kilograms has
+       to recount the batches, which is exactly why the hint underneath says so. */
+    let unitSel = null;
+    if (part.is_template) {
+      unitSel = unitSelect();
+      unitSel.value = part.units || "";
+      unitSel.onchange = () => { targetInput.step = unitSel.value ? "0.25" : "1"; };
+    }
+
+    /* The pack content belongs to the product: "one packet of rice" is 1 kg or 18 kg depending
+       on the brand, and this number is what turns booking in into kilograms. */
+    let packInput = null;
+    if (unit && !part.is_template) {
+      packInput = el("input", { type: "number", step: "0.001", min: "0" });
+      const known = packOf(part);
+      if (known != null) packInput.value = String(known);
+      packInput.placeholder = t("article.packPlaceholder", { example: fmtNum(0.5) });
+    }
+
+    /* Which requirement this product serves. The whole point of the two levels: the target lives on
+       the requirement, so two brands of pasta are short together or not at all. A requirement itself
+       cannot be assigned to another one — one level of grouping is enough for a pantry and
+       two would be a tree nobody maintains. */
+    let reqSelect = null;
+    if (!part.is_template) {
+      reqSelect = el("select");
+      reqSelect.append(el("option", { value: "", textContent: t("requirement.none") }));
+      for (const tpl of [...PARTS.values()].filter((x) => x.is_template)
+                         .sort((a, b) => byName(a.name, b.name))) {
+        reqSelect.append(el("option", { value: String(tpl.pk),
+                                     textContent: tpl.full_name || tpl.name }));
+      }
+      reqSelect.append(el("option", { value: "+", textContent: t("requirement.createOption") }));
+      reqSelect.value = part.variant_of ? String(part.variant_of) : "";
+    }
+
+    const newName = el("input", { type: "text", value: "" });
+    newName.placeholder = t("requirement.newNamePlaceholder");
+    const newWrap = field(t("requirement.new"), newName);
+    newWrap.hidden = true;
+    if (reqSelect) {
+      reqSelect.onchange = () => {
+        newWrap.hidden = reqSelect.value !== "+";
+        if (!newWrap.hidden && !newName.value) {
+          /* A first guess, to be corrected rather than trusted. Everything in brackets is
+             dropped first — that is where brands and marketing live ("Bio Rote Bete Saft
+             (Nur Nur Natur)"), and taking the longest word without dropping it suggested
+             "Natur)", punctuation and all. Of what remains, the longest word is usually the
+             thing itself. */
+          const guess = words(part.name).filter(strongWord);
+          newName.value = guess.sort((a, b) => b.length - a.length)[0] || part.name || "";
+        }
+      };
+    }
+
+    const here = [...new Set(items.map((i) => i.location))];
+    const loc = locSelect(here.length === 1 ? here[0] : part.default_location);
+    if (here.length > 1) {
+      loc.prepend(el("option", { value: "", textContent: t("article.keepLocations") }));
+      loc.value = "";
+    }
+
+    const hint = (key) => p.append(el("div", { className: "hint", textContent: t(key) }));
+    p.append(field(t("field.name"), name), field(t("field.description"), desc));
+    if (reqSelect) { p.append(field(t("field.requirement"), reqSelect), newWrap); }
+    if (unitSel) p.append(field(t("field.unit"), unitSel));
+    p.append(field(unit ? t("field.targetOptionalUnit", { unit: unitLabel(unit) })
+                        : t("field.targetOptional"), targetInput));
+    if (packInput) p.append(field(t("field.packContent") + " (" + unitLabel(unit) + ")", packInput));
+    if (unit) hint("article.quarterHint");
+    p.append(field(t("field.location"), loc));
+    if (unitSel) hint("article.unitHint");
+    if (reqSelect) hint("article.requirementHint");
+    if (here.length > 1) hint("article.movesAll");
+
+    panelButtons(p, t("common.save"), async () => {
+      const target = loc.value ? Number(loc.value) : null;
+
+      // A new requirement is created first, so the product can be pointed at it in one save.
+      let variantTarget;
+      if (reqSelect) {
+        if (reqSelect.value === "+") {
+          const nm = newName.value.trim();
+          if (!nm) { toast(t("requirement.nameMissing"), true); return; }
+          const created = await api("/part/", {
+            method: "POST",
+            body: {
+              name: nm, description: t("requirement.description"), category: part.category,
+              is_template: true, purchaseable: true, active: true,
+              minimum_stock: Number(targetInput.value || 0),
+            },
+          });
+          variantTarget = created.pk;
+          PARTS.set(created.pk, created);
+        } else {
+          variantTarget = reqSelect.value ? Number(reqSelect.value) : null;
+        }
+      }
+
+      if (!name.value.trim()) { toast(t("error.nameEmpty"), true); return; }
+      const patch = {
+        name: name.value.trim(),
+        description: desc.value,
+        // Empty means "no target"; InvenTree stores that as 0, which is also what makes the
+        // article drop out of low_stock and out of the Fehlt filter.
+        minimum_stock: targetInput.value === "" ? 0
+                     : (unitSel ? unitSel.value : unit) ? roundTarget(targetInput.value)
+                     : Number(targetInput.value),
+      };
+      if (unitSel) patch.units = unitSel.value;
+      if (target) patch.default_location = target;
+      if (reqSelect) {
+        patch.variant_of = variantTarget;
+        // With a requirement in charge, a per-brand target would double-count: the requirement already
+        // carries the number, and the brand would show up as short on its own.
+        if (variantTarget) patch.minimum_stock = 0;
+      }
+      await api("/part/" + part.pk + "/", { method: "PATCH", body: patch });
+      if (packInput && packInput.value !== "") await savePack(part, Number(packInput.value));
+
+      const moving = items.filter((i) => i.location !== target);
+      if (target && moving.length) {
+        await api("/stock/transfer/", {
+          method: "POST",
+          body: {
+            items: moving.map((i) => ({ pk: i.pk, quantity: i.quantity })),
+            location: target,
+            notes: t("stock.note"),
+          },
+        });
+      }
+      toast(t("common.saved"));
+      showPart(part.pk);
+    });
+  });
+}
+
+/* Deleting a whole article, not just one batch.
+
+   Two guards, because both failures are silent and expensive: a requirement with products under it
+   would leave them orphaned and their stock uncounted, and a product with stock takes that
+   stock with it. Neither is refused outright — the first is, because there is a correct order
+   (unassign, then delete); the second is only warned about, because throwing away a mistyped
+   article you never actually owned is legitimate. */
+function panelDeletePart(host, part, items) {
+  const kids = [...PARTS.values()].filter((x) => x.variant_of === part.pk);
+
+  openPanel(host, (p) => {
+    if (part.is_template && kids.length) {
+      p.append(el("div", {
+        className: "err",
+        textContent: t("requirement.hasProducts", {
+          n: kids.length, names: kids.map((k) => k.full_name || k.name).join(", "),
+        }),
+      }));
+      const ok = el("button", { className: "btn ghost", textContent: t("common.understood") });
+      ok.onclick = closePanel;
+      const r = el("div", { className: "buttons" });
+      r.append(ok);
+      p.append(r);
+      return;
+    }
+
+    const total = items.reduce((n, i) => n + Number(i.quantity), 0);
+    p.append(el("div", {
+      className: "hint",
+      textContent: t(part.is_template ? "delete.requirement" : "delete.article", { name: part.name })
+                 + (total ? " " + t("delete.stockLost", { amount: fmtQty(total, unitsOf(part)) }) : "")
+                 + " " + t("delete.irreversible"),
+    }));
+    panelButtons(p, t("delete.confirm"), async () => {
+      for (const it of items) await api("/stock/" + it.pk + "/", { method: "DELETE" });
+      // InvenTree refuses to delete an active part, so it is retired first.
+      await api("/part/" + part.pk + "/", { method: "PATCH", body: { active: false } });
+      await api("/part/" + part.pk + "/", { method: "DELETE" });
+      toast(t("delete.done"));
+      PARTS.delete(part.pk);
+      LOW_STOCK.delete(part.pk);
+      // Deleted means there is no way back to this page, not even through the stack.
+      DETAIL_STACK.length = 0;
+      DETAIL_PK = null;
+      showTab(DETAIL_FROM);
+    }, true);
+  });
+}
+
+/* Deleting removes the row outright — it is not "verbraucht", which books a transaction and
+   keeps the history. Both exist on purpose: use-up is the normal path, delete is for a row
+   that should never have been there. It asks first, in the same panel every other action
+   uses, rather than through window.confirm — that is the browser dialog this app spent a
+   version getting rid of. */
+function panelDelete(host, item, after) {
+  openPanel(host, (p) => {
+    p.append(el("div", {
+      className: "hint",
+      textContent: t(item.expiry_date ? "delete.batchDated" : "delete.batch", {
+        what: fmtQty(item.quantity, unitsOf(PARTS.get(item.part))) + " · " + locName(item.location),
+        date: fmtDate(item.expiry_date),
+      }) + " " + t("delete.irreversible"),
+    }));
+    panelButtons(p, t("delete.confirm"), async () => {
+      await api("/stock/" + item.pk + "/", { method: "DELETE" });
+      toast(t("delete.batchDone"));
+      after();
+    }, true);
+  });
+}
+
+/* Six jars bought on two days are two batches with two dates, and until now the app could only
+   hold one date per row — which is exactly the case the user ran into.
+
+   InvenTree has NO split endpoint (checked against the live schema: merge, serialize, convert
+   and install exist, split does not), so this is two calls. The ORDER is the entire safety
+   argument: create the new batch FIRST, then take the amount off the old one. If the second
+   call fails you are holding too much, which is visible on the card and one correction away.
+   Doing it the other way round loses stock with nothing left to show for it. */
+function panelSplit(host, part, item, after) {
+  openPanel(host, (p) => {
+    const max = Number(item.quantity);
+    p.append(el("div", {
+      className: "hint",
+      textContent: t(item.expiry_date ? "split.fromDated" : "split.from", {
+        what: fmtQty(item.quantity, unitsOf(part)) + " · " + locName(item.location),
+        date: fmtDate(item.expiry_date),
+      }),
+    }));
+
+    const u = unitsOf(part);
+    let qty;
+    if (u) {
+      qty = el("input", { type: "number", step: "0.01", min: "0", max: String(max) });
+      qty.value = String(Math.round(max * 50) / 100);   // half, as the obvious suggestion
+    } else {
+      qty = el("select");
+      for (let i = 1; i < max; i++) {
+        qty.append(el("option", { value: String(i), textContent: fmtNum(i) }));
+      }
+      qty.value = "1";
+    }
+
+    const mhd = dateField(
+      t("split.newDate"),
+      part.default_expiry ? isoInDays(part.default_expiry) : (item.expiry_date || ""));
+    p.append(field(u ? t("split.howMuchUnit", { unit: unitLabel(u) }) : t("split.howMany"), qty),
+             mhd.wrap);
+
+    panelButtons(p, t("split.confirm"), async () => {
+      const n = qty.value;
+      const body = { part: item.part, quantity: n, location: item.location };
+      if (mhd.input.value) body.expiry_date = mhd.input.value;
+      await api("/stock/", { method: "POST", body: body });
+      await api("/stock/remove/", {
+        method: "POST",
+        body: { items: [{ pk: item.pk, quantity: n }], notes: t("split.note") },
+      });
+      toast(t("split.done", { amount: fmtQty(n, u) }));
+      after();
+    });
+  });
+}
+
+// --- camera ------------------------------------------------------------------
+let stream = null, scanning = false;
+
+/* Stopping is its own function and gets called from every way out of the tab. A camera that
+   keeps running behind another page is a light that stays on in someone's kitchen. */
+function stopCam() {
+  if (stream) {
+    stream.getTracks().forEach((track) => track.stop());
+    stream = null;
+    scanning = false;
+    const v = $("#cam");
+    if (v) { v.hidden = true; v.srcObject = null; }
+  }
+  updateCamBtn();
+}
+
+/* The camera button only exists for the case where the camera did NOT come up: permission
+   refused, or another app holding the device. In the normal flow it is redundant since the
+   scanner starts by itself — and worse than redundant, because a control still labelled
+   "camera" would then be switching the running camera off.
+
+   Hidden outright where there is no barcode detector: switching on a camera that cannot read
+   anything is not a retry, it is a light. */
+function updateCamBtn() {
+  const btn = $("#camBtn");
+  if (!btn) return;
+  const possible = typeof window !== "undefined" && "BarcodeDetector" in window;
+  btn.hidden = !!stream || !possible;
+  // The row is a two-column grid; with one button gone the other should take the width
+  // rather than leave a hole.
+  const row = btn.parentElement;
+  if (row) row.classList.toggle("solo", btn.hidden);
+}
+
+async function startCam() {
+  if (stream) return;
+  // BarcodeDetector is the native one (Chrome/Android). No polyfill is loaded on purpose:
+  // this page is served from an internal host with no CDN reachable, and typing an EAN is a
+  // perfectly good fallback for the handful of browsers without it.
+  if (!("BarcodeDetector" in window)) {
+    $("#camHint").hidden = false;
+    $("#camHint").textContent = t("scan.noDetector");
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }, audio: false,
+    });
+  } catch (e) {
+    $("#camHint").hidden = false;
+    $("#camHint").textContent = t("scan.cameraDenied", { error: e.message });
+    updateCamBtn();
+    return;
+  }
+  const v = $("#cam");
+  v.hidden = false; v.srcObject = stream; await v.play();
+  updateCamBtn();
+
+  const det = new window.BarcodeDetector({
+    formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "qr_code"],
+  });
+  scanning = true;
+  const tick = async () => {
+    if (!scanning) return;
+    try {
+      const codes = await det.detect(v);
+      if (codes.length) {
+        const code = codes[0].rawValue;
+        $("#ean").value = code;
+        stopCam();
+        lookup(code);
+        return;
+      }
+    } catch (e) { /* a dropped frame is not an error worth surfacing */ }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+// --- stocktake ---------------------------------------------------------------
+/* Everything, filtered by tapping — not a location you must pick before seeing anything.
+   The rows are fetched once and filtered in the browser: a household inventory is a few
+   hundred rows, so a refetch per chip would be latency spent on nothing. */
+let STOCK_ALL = [];
+let STOCK_FILTER = null;   // null = alle; otherwise a location pathstring
+let STOCK_QUERY = "";      // free-text search, matched against name, description and place
+let STOCK_SHORT = false;   // only articles under their target
+/* pk -> the Part row, for everything the server considers under target. Fetched separately
+   and not derived from the stock rows, because the interesting case is an article that is
+   MISSING ENTIRELY: it has no stock row at all, so it cannot appear in a list built from
+   stock. `low_stock=true` is InvenTree's own comparison of total stock against the article's
+   minimum_stock, which is what this app calls the target. */
+let LOW_STOCK = new Map();
+/* pk -> Part, for every article. Needed because the nested `part_detail` on a stock row is a
+   PartBrief, and PartBrief does NOT carry `variant_of` — so without this the overview cannot
+   tell which requirement a product belongs to. One extra request for the whole catalogue, which in
+   a household is a few dozen rows. */
+let PARTS = new Map();
+
+const requirementOf = (pk) => (PARTS.get(pk) || {}).variant_of || null;
+const requirementName = (pk) => {
+  const tpl = PARTS.get(requirementOf(pk));
+  return tpl ? (tpl.full_name || tpl.name) : null;
+};
+
+const targetOf = (pd) => Number((pd || {}).minimum_stock || 0);
+
+/* Matching is by pathstring PREFIX, which is what makes "Keller" also cover
+   "Keller/Krisenvorrat" — the same thing the API's cascade=true used to do for us, minus the
+   round trip. The separator check stops "Keller" from also swallowing a "Kellerregal". */
+function matchesPlace(path, place) {
+  const f = place === undefined ? STOCK_FILTER : place;
+  if (!f) return true;
+  return path === f || path.startsWith(f + "/");
+}
+
+function matchesQuery(pd, path, query) {
+  const q = query === undefined ? STOCK_QUERY : query;
+  if (!q) return true;
+  // Name, description and place all count: on a phone you search for "tomaten", for "bio"
+  // (which the OFF plugin writes into keywords and often the description) or for "keller".
+  const hay = [(pd || {}).full_name, (pd || {}).name, (pd || {}).description, (pd || {}).IPN,
+               path].filter(Boolean).join(" ").toLowerCase();
+  return hay.includes(q);
+}
+
+function inFilter(item) {
+  const path = locName(item.location);
+  return matchesPlace(path) && matchesQuery(item.part_detail, path);
+}
+
+/* One entry per ARTICLE: its batches, its totals, and whether it is under target. Articles
+   that are missing entirely come in from LOW_STOCK with no batches at all — without them
+   "Fehlbestand" would list everything except the things you have actually run out of. */
+/* `over` lets a caller ask the same question with different filters — the shopping list wants
+   "everything under target, everywhere", regardless of what the stock tab happens to be
+   filtered to. Omitted, it uses the stock tab's current filters. */
+function articleEntries(over) {
+  const o = over || {};
+  const wantShort = "short" in o ? o.short : STOCK_SHORT;
+  const wantPlace = "place" in o ? o.place : STOCK_FILTER;
+  const wantQuery = "query" in o ? o.query : STOCK_QUERY;
+  const byPart = new Map();
+
+  for (const it of STOCK_ALL) {
+    if (!byPart.has(it.part)) byPart.set(it.part, []);
+    byPart.get(it.part).push(it);
+  }
+
+  const entries = [];
+
+  for (const [pk, batches] of byPart) {
+    const pd = batches[0].part_detail || {};
+    const total = batches.reduce((n, i) => n + Number(i.quantity), 0);
+    const target = targetOf(pd);
+    // A shortfall belongs to the requirement, not to the brand: two kinds of pasta under one
+    // "Nudeln" are short together or not at all, and the number that matters is the requirement's.
+    const tpl = LOW_STOCK.get(requirementOf(pk));
+    const own = target ? Math.max(0, target - total) : 0;
+    entries.push({
+      pk: pk, pd: pd, batches: batches, total: total, target: target,
+      places: [...new Set(batches.map((i) => locName(i.location)))],
+      requirement: requirementName(pk),
+      missing: own || (tpl ? Math.max(0, targetOf(tpl) - Number(tpl.total_in_stock || 0)) : 0),
+      first: batches[0].expiry_date || "9999-12-31",
+    });
+  }
+
+
+  return entries
+    .filter((e) => {
+      if (wantShort && !e.missing) return false;
+      if (wantPlace && !e.places.some((pl) => matchesPlace(pl, wantPlace))) return false;
+      if (wantQuery && !matchesQuery(e.pd, e.places.join(" "), wantQuery)) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      // Shortfalls first — if you opened the list to see what is missing, that is the answer.
+      if (!!b.missing !== !!a.missing) return b.missing ? 1 : -1;
+      return a.first < b.first ? -1 : a.first > b.first ? 1 : 0;
+    });
+}
+
+function drawChips() {
+  const sel = $("#locsel");
+  const btn = $("#shortbtn");
+
+  const counts = new Map();
+  // Counted over the TEXT-filtered set but not the location-filtered one: the numbers should
+  // say "how many of what you searched for are here", while staying comparable between
+  // entries. Using STOCK_ALL would make them contradict the list you are looking at.
+  const base = STOCK_ALL.filter((i) => matchesQuery(i.part_detail, locName(i.location)));
+
+  for (const it of base) {
+    // A row counts towards its own location and every ancestor, so the numbers add up the way
+    // the tree reads rather than the way the rows are stored.
+    const parts = locName(it.location).split("/");
+    for (let i = 1; i <= parts.length; i++) {
+      const key = parts.slice(0, i).join("/");
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+
+  sel.innerHTML = "";
+  sel.append(el("option", { value: "", textContent: t("stock.allLocations", { n: base.length }) }));
+  // Only places that actually hold something: an empty shelf is an option you never want.
+  for (const l of LOCATIONS) {
+    const n = counts.get(l.pathstring) || 0;
+    if (n) {
+      sel.append(el("option", {
+        value: l.pathstring, textContent: l.pathstring + " (" + n + ")",
+      }));
+    }
+  }
+  // A place that no longer holds anything drops out of the list, so the filter drops with it.
+  if (STOCK_FILTER && ![...sel.options].some((o) => o.value === STOCK_FILTER)) {
+    STOCK_FILTER = null;
+  }
+  sel.value = STOCK_FILTER || "";
+  sel.onchange = () => { STOCK_FILTER = sel.value || null; drawStocktake(); };
+
+  const short = articleEntriesShortCount();
+  btn.innerHTML = "";
+  const ic = el("span", { className: "ic" });
+  ic.innerHTML = icon("alert", 18);
+  btn.append(ic, el("span", { textContent: t("stock.missingToggle") }),
+             el("span", { className: "n", textContent: fmtNum(short) }));
+  btn.setAttribute("aria-pressed", String(STOCK_SHORT));
+  btn.disabled = !short && !STOCK_SHORT;
+  btn.style.opacity = btn.disabled ? "0.45" : "";
+  btn.title = STOCK_SHORT ? t("stock.showAll") : t("stock.showShort");
+  btn.onclick = () => { STOCK_SHORT = !STOCK_SHORT; drawChips(); drawStocktake(); };
+}
+
+/* The count for the "Fehlt" toggle, taken without the shortfall filter itself applied —
+   otherwise the number would only ever be the number you are already looking at. */
+function articleEntriesShortCount() {
+  return articleEntries({ short: false }).filter((e) => e.missing).length;
+}
+
+/* The shopping list is not derived from stock rows but from what the SERVER considers under
+   target — which is the only source that gets requirements right: a template holds no stock of its
+   own, its variants do, and `total_in_stock` is InvenTree's own sum over them. Building this
+   from stock rows would list brands, and miss anything that has run out entirely. */
+function shoppingEntries() {
+  const out = [];
+  for (const part of LOW_STOCK.values()) {
+    const have = Number(part.total_in_stock ?? part.in_stock ?? 0);
+    const target = targetOf(part);
+    if (!target || have >= target) continue;
+    out.push({
+      pk: part.pk, pd: part, total: have, target: target, missing: target - have,
+      template: !!part.is_template,
+      places: [...new Set(STOCK_ALL
+        .filter((i) => i.part === part.pk || requirementOf(i.part) === part.pk)
+        .map((i) => locName(i.location)))],
+    });
+  }
+  return out.sort((a, b) => byName(a.pd.name, b.pd.name));
+}
+
+// "12 articles" and "3 batches", counted with the language's plural rules.
+const nArticles = (n) => t("count.articles", { n: n });
+
+function drawStocktake() {
+  closePanel();
+  const entries = articleEntries();
+  const box = $("#stocklist");
+  box.innerHTML = "";
+
+  if (!entries.length) {
+    box.append(hintCard(!STOCK_ALL.length && !LOW_STOCK.size ? t("stock.emptyAll")
+      : STOCK_SHORT ? t("stock.nothingMissing")
+      : STOCK_QUERY ? t("common.noResults") : t("stock.emptyHere")));
+    return;
+  }
+
+  /* The one heading that used to be a plain count line. It follows the same shape as every other
+     section: a noun for what the box holds, then what narrows it after a middle dot.
+
+     The selected place is deliberately NOT in here, although it narrows the list too. Location
+     names are free text, and "Krisenvorrat" already wrapped this heading onto a second line at
+     360 px — in 12 px letter-spaced capitals that reads like a mistake. The select right above the
+     list names the place anyway. */
+  const batchCount = entries.reduce((n, e) => n + e.batches.length, 0);
+  const c = el("div", { className: "card" });
+  c.append(el("h2", {
+    className: "sec",
+    textContent: (STOCK_SHORT ? t("stock.headingShort") : t("stock.heading"))
+               + " · " + nArticles(entries.length)
+               + (batchCount > entries.length ? " · " + t("count.batches", { n: batchCount }) : ""),
+  }));
+  const ul = el("ul", { className: "stock" });
+
+  for (const e of entries) {
+    const name = e.pd.full_name || t("article.fallbackName", { pk: e.pk });
+    const li = el("li");
+    const row = el("button", { className: "btn ghost rowlink" });
+    row.title = t("article.open");
+
+    row.append.apply(row, miniThumb(e.pd, name));
+
+    const who = el("div", { className: "who" });
+    who.append(el("div", { className: "nm", textContent: name }));
+    who.append(el("div", {
+      className: "meta",
+      textContent: (e.target ? t("stock.haveOfTarget", {
+                    have: fmtQty(e.total, unitsOf(e.pd)), target: fmtQty(e.target, unitsOf(e.pd)),
+                  }) : fmtQty(e.total, unitsOf(e.pd)))
+                 + (e.requirement ? " · " + e.requirement : "")
+                 + (e.places.length ? " · " + (e.places.length === 1 ? e.places[0]
+                                               : t("count.places", { n: e.places.length })) : ""),
+    }));
+
+    const dates = el("div", { className: "dates" });
+    if (e.missing) {
+      dates.append(el("span", { className: "pill bad",
+                                textContent: t("stock.missingAmount", { amount: fmtQty(e.missing, unitsOf(e.pd)) }) }));
+    }
+    if (e.batches.length) {
+      dates.append(expiryPill(e.batches[0].expiry_date));
+      if (e.batches.length > 1) {
+        dates.append(el("span", {
+          className: "pill", textContent: t("stock.moreBatches", { n: e.batches.length - 1 }),
+        }));
+      }
+    } else {
+      dates.append(el("span", { className: "pill", textContent: t("stock.noStock") }));
+    }
+    who.append(dates);
+    row.append(who);
+
+    const chev = el("div", { className: "chev" });
+    chev.innerHTML = icon("chevron", 24);
+    row.append(chev);
+
+    row.onclick = () => openPart(e.pk, "stock");
+    row.dataset.pk = String(e.pk);
+    li.append(row);
+    ul.append(li);
+  }
+
+  c.append(ul);
+  box.append(c);
+  focusLastRow(box);
+}
+
+/* Draw from what we already have, then refresh in the background.
+
+   Every tab switch and every "back" used to throw the list away and wait ~180 ms for the
+   same rows to come back, with a "loading" flash in between. That wait is what made the app
+   feel slow — not the rendering, and not the server, which answers in 25-90 ms. Now the list
+   is on screen instantly and quietly corrects itself a moment later. A cold start still shows
+   the loading line, because then there genuinely is nothing to show. */
+async function renderStocktake(force) {
+  closePanel();
+  const cold = !STOCK_ALL.length && !LOW_STOCK.size;
+
+  if (cold) { $("#stocklist").innerHTML = ""; $("#stocklist").append(hintCard(t("common.loading"))); }
+  else { drawChips(); drawStocktake(); }
+
+  if (!cold && force === false) return;
+
+  try {
+    await loadStockData();
+  } catch (e) {
+    if (cold) { $("#stocklist").innerHTML = ""; $("#stocklist").append(hintCard(e.message, "card err")); }
+    return;
+  }
+
+  drawChips();
+  drawStocktake();
+  drawTabs();
+  LAST_OPENED = null;        // the final draw has happened; stop chasing the row
+}
+
+/* The one fetch both list views are built from. Neither endpoint needs the other, so they go
+   together; `low_stock` is what supplies articles that have run out completely and therefore
+   own no stock row at all. */
+async function loadStockData() {
+  const [data, low, parts, params, tpls] = await Promise.all([
+    api("/stock/?in_stock=true&part_detail=true&limit=500"),
+    api("/part/?low_stock=true&limit=500"),
+    api("/part/?limit=500"),
+    // Pack contents in ONE request instead of one per product. If it fails the app keeps
+    // counting packets — imprecise, but not broken.
+    api("/parameter/?limit=1000", { quiet: true }).catch(() => null),
+    api("/parameter/template/?limit=100", { quiet: true }).catch(() => null),
+  ]);
+
+  STOCK_ALL = (data.results || data || []).slice()
+    .sort((a, b) => ((a.expiry_date || "9999") < (b.expiry_date || "9999") ? -1 : 1));
+
+  LOW_STOCK = new Map();
+  for (const part of (low.results || low || [])) LOW_STOCK.set(part.pk, part);
+
+  PARTS = new Map();
+  for (const part of (parts.results || parts || [])) PARTS.set(part.pk, part);
+
+  PACK_TPL = null;
+  for (const tpl of ((tpls && (tpls.results || tpls)) || [])) {
+    if (tpl.name === PACK_NAME) PACK_TPL = tpl.pk;
+  }
+  PACK.clear();
+  PACK_PARAM.clear();
+  for (const prm of ((params && (params.results || params)) || [])) {
+    if (!PACK_TPL || prm.template !== PACK_TPL) continue;
+    // `data_numeric` is InvenTree's own parse; `data` is the raw text and only the fallback.
+    const v = Number(prm.data_numeric != null ? prm.data_numeric : prm.data);
+    if (isFinite(v) && v > 0) { PACK.set(prm.model_id, v); PACK_PARAM.set(prm.model_id, prm.pk); }
+  }
+
+  // A filter pointing at a location that no longer holds anything would show an empty list
+  // with no hint why, so it falls back to showing everything.
+  if (STOCK_FILTER && !STOCK_ALL.some(inFilter)) STOCK_FILTER = null;
+}
+
+// ---------------- shopping list ----------------------------------------------
+async function renderBuy() {
+  const cold = !STOCK_ALL.length && !LOW_STOCK.size;
+  if (cold) { $("#buylist").innerHTML = ""; $("#buylist").append(hintCard(t("common.loading"), "hint")); }
+  else drawBuy();
+
+  try { await loadStockData(); } catch (e) {
+    if (cold) { $("#buylist").innerHTML = ""; $("#buylist").append(hintCard(e.message, "err")); }
+    return;
+  }
+  drawBuy();
+  drawTabs();
+  LAST_OPENED = null;        // the final draw has happened; stop chasing the row
+}
+
+/* The list as plain text. Plain text on purpose: it is the one format every target
+   understands — a messenger, a notes app, a mail, the clipboard — and it stays readable if it
+   ends up somewhere none of us thought of. */
+function buyText(entries) {
+  const lines = [t("buy.textTitle", { date: fmtDate(new Date()) }), ""];
+  for (const e of entries) {
+    const u = unitsOf(e.pd);
+    lines.push(t("buy.textLine", {
+      name: e.pd.full_name || t("article.fallbackName", { pk: e.pk }),
+      missing: fmtQty(e.missing, u), have: fmtQty(e.total, u), target: fmtQty(e.target, u),
+    }));
+  }
+  return lines.join("\n");
+}
+
+/* Share first, clipboard second.
+
+   `navigator.share` hands the text to Android's own share sheet, which means the list can go
+   to Telegram, a notes app, a mail or anything else installed — without this app having to
+   pick a service, hold a token for it, or be changed when the choice changes. Where the API
+   is missing (desktop browsers, mostly) the text goes to the clipboard instead, which is the
+   same thing minus the menu. */
+async function shareList(text) {
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: t("buy.heading"), text: text });
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") return;   // the user closed the sheet; not a failure
+    }
+  }
+  await copyList(text);
+}
+
+async function copyList(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(t("buy.copied"));
+  } catch (e) {
+    toast(t("buy.copyFailed", { error: e.message }), true);
+  }
+}
+
+/* Every requirement, whether short or not — the list has to be reachable to be maintainable. A
+   satisfied requirement appears nowhere else: it holds no stock, so it is not in the stock tab, and
+   it is not short, so it is not on the shopping list. Without this view the 80 entries would
+   be frozen at whatever they were imported as. */
+function allRequirements() {
+  const out = [];
+  for (const part of PARTS.values()) {
+    if (!part.is_template) continue;
+    const have = Number(part.total_in_stock ?? 0);
+    const target = targetOf(part);
+    out.push({
+      pk: part.pk, pd: part, total: have, target: target,
+      missing: target ? Math.max(0, target - have) : 0, template: true,
+      places: [...new Set(STOCK_ALL
+        .filter((i) => requirementOf(i.part) === part.pk)
+        .map((i) => locName(i.location)))],
+    });
+  }
+  return out.sort((a, b) => byName(a.pd.name, b.pd.name));
+}
+
+let BUY_ALL = false;
+let BUY_QUERY = "";
+
+/* Matches against name and description only — a requirement has no place of its own, and the
+   places its products happen to sit would make "Keller" match half the list for no reason the
+   user could see. */
+function buyMatch(e) {
+  if (!BUY_QUERY) return true;
+  const pd = e.pd || {};
+  return [pd.full_name, pd.name, pd.description]
+    .filter(Boolean).join(" ").toLowerCase().includes(BUY_QUERY);
+}
+
+function drawBuy() {
+  const box = $("#buylist");
+  const missing = shoppingEntries().filter(buyMatch);
+  const entries = (BUY_ALL ? allRequirements() : shoppingEntries()).filter(buyMatch);
+
+  // Share what is on screen. Filtering to three entries and then sending eighty would be a
+  // surprise; the count on the button says plainly what is about to go out.
+  drawFab(missing);
+
+  const controls = $("#buycontrols");
+  controls.innerHTML = "";
+  const tog = labelButton("ghost", BUY_ALL ? "cart" : "list",
+                          BUY_ALL ? t("buy.onlyMissing") : t("buy.allRequirements"));
+  tog.onclick = () => { BUY_ALL = !BUY_ALL; drawBuy(); };
+  const neu = labelButton("ghost", "plus", t("requirement.new"));
+  neu.onclick = () => { DETAIL_FROM = "buy"; showTab("new"); };
+  controls.append(tog, neu);
+
+  box.innerHTML = "";
+  box.append(el("h2", {
+    className: "sec",
+    textContent: (BUY_ALL ? t("buy.allRequirements") : t("buy.heading"))
+               + (BUY_QUERY ? " · " + t("count.hits", { n: entries.length }) : ""),
+  }));
+
+  if (!entries.length) {
+    box.append(el("div", {
+      className: "hint",
+      textContent: BUY_QUERY ? t("common.noResults")
+        : BUY_ALL ? t("buy.noRequirements")
+        : t("buy.complete"),
+    }));
+    return;
+  }
+
+  for (const e of entries) {
+    const row = el("button", { className: "btn ghost buyrow" });
+    row.title = t("requirement.open");
+    const who = el("div", { className: "grow" });
+    who.append(el("div", { textContent: e.pd.full_name || t("article.fallbackName", { pk: e.pk }) }));
+    who.append(el("div", {
+      className: "meta",
+      textContent: (e.target ? t("buy.haveOfTarget", {
+                                  have: fmtQty(e.total, unitsOf(e.pd)),
+                                  target: fmtQty(e.target, unitsOf(e.pd)),
+                                })
+                              : t("buy.noTarget"))
+                 + (e.places.length ? " · " + e.places.join(", ") : ""),
+    }));
+    row.append(who);
+    row.append(el("div", {
+      className: e.missing ? "need" : "meta",
+      textContent: e.missing ? "+" + fmtQty(e.missing, unitsOf(e.pd)) : t("buy.ok"),
+    }));
+    row.onclick = () => openPart(e.pk, "buy");
+    row.dataset.pk = String(e.pk);
+    box.append(row);
+  }
+  focusLastRow(box);
+
+}
+
+/* One floating button, showing what THIS device can actually do.
+
+   On a phone "copy" is all but redundant: Android's own share sheet offers copying to the
+   clipboard among everything else, so a second button would spend a permanent piece of the
+   screen on a duplicate. Where the Web Share API is missing — desktop browsers, mostly — the
+   same button copies instead. One control, always the right one.
+
+   Sharing always sends the SHORTFALLS, never the full catalogue: nobody takes eighty lines to
+   the shop, and the "all requirements" toggle is about editing, not about what you buy. */
+function drawFab(entries) {
+  const fab = $("#fab");
+
+  if (!entries || !entries.length) {
+    fab.hidden = true;
+    return;
+  }
+
+  const canShare = typeof navigator !== "undefined" && !!navigator.share;
+  fab.innerHTML = "";
+  const ic = el("span", { className: "ic" });
+  ic.innerHTML = icon(canShare ? "share" : "copy", 20);
+  fab.append(ic, el("span", {
+    // The count appears only while a search narrows the list — otherwise it would just repeat
+    // the badge on the tab.
+    textContent: (canShare ? t("buy.share") : t("buy.copy"))
+               + (BUY_QUERY ? " (" + fmtNum(entries.length) + ")" : ""),
+  }));
+  fab.onclick = () => (canShare ? shareList : copyList)(buyText(entries));
+  fab.hidden = false;
+}
+
+/* Which tab the detail or new page was opened from, so "back" returns there instead of
+   guessing. */
+let DETAIL_FROM = "stock";
+
+function showTab(which) {
+  $("#view-scan").hidden = which !== "scan";
+  $("#view-stock").hidden = which !== "stock";
+  $("#view-buy").hidden = which !== "buy";
+  $("#view-expiry").hidden = which !== "expiry";
+  $("#view-detail").hidden = which !== "detail";
+  $("#view-new").hidden = which !== "new";
+
+  // While a detail or new page is open the tab it was reached from stays marked: those are
+  // pages *within* a tab, not further destinations.
+  const marked = (which === "detail" || which === "new") ? DETAIL_FROM : which;
+  for (const [id] of TABS) {
+    $("#tab-" + id).setAttribute("aria-selected", String(marked === id));
+  }
+
+  // Hidden first: leaving it up while another tab renders would offer an action that does not
+  // belong to what is on screen.
+  $("#fab").hidden = true;
+  /* The scanner is what the tab is FOR, so it starts by itself instead of behind a button —
+     and stops the moment you leave, including on the way to an article you just scanned. */
+  if (which === "scan") startCam(); else stopCam();
+  if (which === "stock") renderStocktake();
+  if (which === "buy") renderBuy();
+  if (which === "expiry") renderExpiry();
+  if (which === "new") drawNewRequirement();
+  // Not when a row is waiting to be brought back into view — that would scroll to the top and
+  // then jump, which looks broken and loses the place you were working in.
+  if (!LAST_OPENED) window.scrollTo(0, 0);
+  saveView(which);
+}
+
+/* Where the user was, so a reload puts them back. sessionStorage, not localStorage: opening
+   the app tomorrow should start at the stock list, but pressing reload on a requirement you were
+   editing should not throw the page away. */
+const VIEW_KEY = "vorrat.view";
+
+function saveView(which, pk) {
+  try {
+    sessionStorage.setItem(VIEW_KEY, JSON.stringify({
+      view: which, pk: pk || null, from: DETAIL_FROM,
+    }));
+  } catch (e) { /* private mode; the app just forgets */ }
+}
+
+async function restoreView() {
+  let v = null;
+  try { v = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "null"); } catch (e) { v = null; }
+  if (!v) return false;
+
+  if (v.view === "detail" && v.pk) {
+    DETAIL_FROM = v.from === "buy" ? "buy" : "stock";
+    showTab(DETAIL_FROM);            // the list has to exist behind the page
+    // After a reload there is no way back to spend: history starts afresh here, so no entry
+    // is created either.
+    try { await openPart(v.pk, DETAIL_FROM, { noHistory: true }); return true; }
+    catch (e) { return false; }
+  }
+  if (["stock", "buy", "expiry", "scan", "new"].indexOf(v.view) >= 0) {
+    if (v.view === "new") DETAIL_FROM = v.from === "buy" ? "buy" : "stock";
+    showTab(v.view);
+    return true;
+  }
+  return false;
+}
+
+/* The row the user last opened, so returning to a list lands on it instead of at the top.
+   Working through a shopping list means going down it; scrolling back to position 40 after
+   every entry is the kind of friction that makes people stop using a thing. */
+let LAST_OPENED = null;
+
+/* Deliberately does NOT clear LAST_OPENED: a list is drawn twice on the way back — once from
+   the cache so it appears instantly, once after the refresh — and the second pass rebuilds
+   the DOM. Clearing on the first pass meant the scroll was undone a moment later by a redraw
+   that no longer knew where to look. The callers clear it once they are done drawing. */
+function focusLastRow(box) {
+  if (!LAST_OPENED) return;
+  const row = box.querySelector('[data-pk="' + LAST_OPENED + '"]');
+  if (!row) return;
+  // After layout, or the row's position is still the one it had before this redraw.
+  requestAnimationFrame(() => {
+    row.scrollIntoView({ block: "center" });
+    row.classList.add("justleft");
+    setTimeout(() => row.classList.remove("justleft"), 1800);
+  });
+}
+
+/* Creating a requirement is a page, not a panel: it is a form you arrive at deliberately, and on a
+   phone a panel under eighty rows puts the fields somewhere you have to hunt for. */
+function drawNewRequirement() {
+  const back = $("#newback");
+  back.innerHTML = "";
+  const bi = el("span", { className: "ic" });
+  bi.innerHTML = icon("back");
+  back.append(bi, el("span", { textContent: t("nav.back") }));
+  back.onclick = () => showTab(DETAIL_FROM);
+
+  const box = $("#newform");
+  box.innerHTML = "";
+  box.append(el("h2", { className: "sec", textContent: t("requirement.new") }));
+
+  const name = el("input", { type: "text" });
+  name.placeholder = t("requirement.namePlaceholder");
+  const cat = el("select");
+  for (const c of CATEGORIES) {
+    cat.append(el("option", { value: String(c.pk), textContent: c.pathstring }));
+  }
+  const targetInput = el("input", { type: "number", value: "1" });
+  targetInput.min = "0";
+  targetInput.step = "1";
+
+  /* The unit decides whether this requirement is counted or measured. Counted is right for
+     anything bought by the piece (rolls, packets, batteries); measured for anything where the
+     target is an amount and the packet size depends on the shop. */
+  const unitSel = unitSelect();
+  const targetField = field(t("field.target"), targetInput);
+  const targetLabel = targetField.querySelector("label");
+  unitSel.onchange = () => {
+    targetInput.step = unitSel.value ? "0.25" : "1";
+    if (targetLabel) {
+      targetLabel.textContent = unitSel.value
+        ? t("field.target") + " (" + unitLabel(unitSel.value) + ")" : t("field.target");
+    }
+  };
+
+  box.append(field(t("field.name"), name), field(t("field.category"), cat),
+             field(t("field.unit"), unitSel), targetField);
+  box.append(el("div", { className: "hint", textContent: t("requirement.newHint") }));
+
+  const row = el("div", { className: "buttons" });
+  const ok = el("button", { className: "btn primary", textContent: t("common.create") });
+  const no = el("button", { className: "btn ghost", textContent: t("common.cancel") });
+  no.onclick = () => showTab(DETAIL_FROM);
+  ok.onclick = async () => {
+    if (!name.value.trim()) return toast(t("error.nameMissing"), true);
+    ok.disabled = true;
+    try {
+      const created = await api("/part/", {
+        method: "POST",
+        body: {
+          name: name.value.trim(), description: t("requirement.description"),
+          category: Number(cat.value),
+          is_template: true, purchaseable: true, active: true,
+          units: unitSel.value,
+          minimum_stock: unitSel.value ? roundTarget(targetInput.value)
+                                       : Number(targetInput.value || 0),
+        },
+      });
+      PARTS.set(created.pk, created);
+      toast(t("requirement.created"));
+      // Straight into the new requirement: the next thing you want is almost always to look at it.
+      openPart(created.pk, "buy");
+    } catch (e) {
+      toast(e.message, true);
+      ok.disabled = false;
+    }
+  };
+  row.append(ok, no);
+  box.append(row);
+  name.focus();
+}
+
+// ---------------- expiring soon ---------------------------------------------
+/* LEAD_FRACTION, LEAD_MIN_DAYS and LEAD_MAX_DAYS come from `expiry` in config.json — the
+   same three numbers the expiry watchdog reads, so the app and the push cannot disagree about
+   what "soon" means. docs/design.md has the reasoning. */
+
+/* How many days before its expiry a batch starts being mentioned.
+
+   Shelf life is the LARGER of the batch's own span (expiry minus the day it was booked in) and
+   the kind's nominal durability (`default_expiry`, filled in from our category table).
+
+   Taking only the batch collapses during a stocktake: enter everything on one day and "shelf
+   life" equals "time left" for every row, so the warning always lands at the same fraction of
+   the remainder. That is how UHT milk with 11 days to go stayed out of the list — 11 × 20 % is
+   2 days, floored to 5 — while being the most urgent thing in the house. Taking only the
+   nominal value is wrong the other way, for batteries dated years past their category default.
+   The maximum is right in both directions. */
+function leadDays(created, expiry, nominal) {
+  const spans = [Number(nominal || 0)];
+  if (created) spans.push(Math.round((expiry - created) / 86400000));
+  const shelf = Math.max.apply(null, spans);
+  if (shelf <= 0) return LEAD_MIN_DAYS;
+  return Math.min(Math.max(Math.round(shelf * LEAD_FRACTION), LEAD_MIN_DAYS), LEAD_MAX_DAYS);
+}
+
+function expiryEntries() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const out = [];
+
+  for (const it of STOCK_ALL) {
+    // No date is not an expiry case. Batteries without one are simply not this tab's business.
+    if (!it.expiry_date) continue;
+    const expiry = new Date(it.expiry_date);
+    const created = it.creation_date ? new Date(String(it.creation_date).slice(0, 10)) : null;
+    const left = Math.round((expiry - today) / 86400000);
+    const lead = leadDays(created, expiry, (it.part_detail || {}).default_expiry);
+    if (left > lead) continue;
+    out.push({ it: it, left: left, lead: lead });
+  }
+
+  return out.sort((a, b) => a.left - b.left);
+}
+
+function drawExpiry() {
+  const box = $("#expirylist");
+  const entries = expiryEntries();
+  box.innerHTML = "";
+  box.append(el("h2", { className: "sec", textContent: t("tab.expiry") }));
+
+  if (!entries.length) {
+    box.append(el("div", { className: "hint", textContent: t("expiry.nothing") }));
+    return;
+  }
+
+  for (const e of entries) {
+    const it = e.it;
+    const pd = it.part_detail || {};
+    const row = el("button", { className: "btn ghost buyrow" });
+    row.title = t("article.open");
+    const name = pd.full_name || t("article.fallbackName", { pk: it.part });
+    row.append.apply(row, miniThumb(pd, name));
+
+    const who = el("div", { className: "grow" });
+    who.append(el("div", { textContent: name }));
+    who.append(el("div", {
+      className: "meta",
+      textContent: fmtQty(it.quantity, unitsOf(PARTS.get(it.part) || pd)) + " · "
+                 + locName(it.location),
+    }));
+    const line = el("div", { className: "dates" });
+    line.append(expiryPill(it.expiry_date));
+    line.append(el("span", {
+      className: "pill" + (e.left < 0 ? " bad" : e.left <= LEAD_MIN_DAYS ? " warn" : ""),
+      // The remaining time in words, because "13.9.2027" alone does not say whether that is
+      // soon — which is the entire question this tab answers.
+      textContent: daysLeft(e.left),
+    }));
+    who.append(line);
+    row.append(who);
+
+    const chev = el("div", { className: "chev" });
+    chev.innerHTML = icon("chevron", 24);
+    row.append(chev);
+
+    row.onclick = () => openPart(it.part, "expiry");
+    row.dataset.pk = String(it.part);
+    box.append(row);
+  }
+
+  focusLastRow(box);
+}
+
+async function renderExpiry() {
+  const cold = !STOCK_ALL.length;
+  if (cold) { $("#expirylist").innerHTML = ""; $("#expirylist").append(hintCard(t("common.loading"), "hint")); }
+  else drawExpiry();
+
+  try {
+    await loadStockData();
+  } catch (e) {
+    if (cold) { $("#expirylist").innerHTML = ""; $("#expirylist").append(hintCard(e.message, "err")); }
+    return;
+  }
+  drawExpiry();
+  drawTabs();
+  LAST_OPENED = null;
+}
+
+const TABS = [
+  ["stock", "list", "tab.stock"],
+  ["buy", "cart", "tab.buy"],
+  ["expiry", "hourglass", "tab.expiry"],
+  ["scan", "scan", "tab.scan"],
+];
+
+/* The bar itself: icon over label, plus a count on the shopping tab so the number of missing things is
+   visible without opening the tab — which is the entire reason it is its own destination and
+   not a filter you have to remember to switch on. */
+function drawTabs() {
+  for (const [id, name, label] of TABS) {
+    const b = $("#tab-" + id);
+    b.innerHTML = "";
+    const ic = el("span", { className: "tabic" });
+    ic.innerHTML = icon(name, 24);
+    if (id === "buy") {
+      // The badge counts SHOPPING-LIST positions, not short products in stock. Since staples exist, a
+      // shortfall belongs to a requirement, and a requirement holds no stock of its own — counting
+      // stocked articles left the badge permanently at zero with 79 things missing.
+      const n = shoppingEntries().length;
+      if (n) ic.append(el("span", { className: "badge", textContent: fmtNum(n) }));
+    }
+    if (id === "expiry") {
+      const n = expiryEntries().length;
+      if (n) ic.append(el("span", { className: "badge", textContent: fmtNum(n) }));
+    }
+    b.append(ic, el("span", { textContent: t(label) }));
+  }
+}
+
+/* The app proper. Called once we hold a working token; rebuilds the two views from scratch
+   because showLogin() will have emptied <main>. */
+const APP_HTML = document.querySelector("main").innerHTML;
+
+let LOCATIONS_PENDING = null;
+
+async function startApp() {
+  // Fired before the identity check is awaited: the locations do not depend on it, and in
+  // series the two round trips simply added up.
+  LOCATIONS_PENDING = Promise.all([
+    api("/stock/location/?limit=500"),
+    api("/part/category/?limit=500"),
+  ]);
+  document.querySelector("main").innerHTML = APP_HTML;
+  applyStatic(document.querySelector("main"));
+  document.querySelector("nav").hidden = false;
+  $("#logout").hidden = false;
+
+  for (const [id] of TABS) $("#tab-" + id).onclick = () => showTab(id);
+  drawTabs();
+  // The button does not navigate by itself but takes back one history entry — the same move
+  // as the Android gesture, so both go the same way. The tabs stay the second way out, which
+  // is why the detail page is never a dead end.
+  $("#detailback").onclick = () => history.back();
+  $("#searchicon").innerHTML = icon("search");
+  $("#qclear").innerHTML = icon("close", 20);
+  const applyQuery = () => {
+    STOCK_QUERY = $("#q").value.trim().toLowerCase();
+    $("#qclear").hidden = !$("#q").value;
+    // No debounce and no refetch: the rows are already in memory, so this is a filter over a
+    // few hundred objects — faster than the keystroke that triggered it.
+    drawChips();
+    drawStocktake();
+  };
+  $("#q").addEventListener("input", applyQuery);
+  $("#qclear").onclick = () => { $("#q").value = ""; applyQuery(); $("#q").focus(); };
+
+  $("#buysearchicon").innerHTML = icon("search");
+  $("#buyqclear").innerHTML = icon("close", 20);
+  const applyBuyQuery = () => {
+    BUY_QUERY = $("#buyq").value.trim().toLowerCase();
+    $("#buyqclear").hidden = !$("#buyq").value;
+    drawBuy();
+  };
+  $("#buyq").addEventListener("input", applyBuyQuery);
+  $("#buyqclear").onclick = () => { $("#buyq").value = ""; applyBuyQuery(); $("#buyq").focus(); };
+  const fill = (sel, name, text) => {
+    const b = $(sel);
+    b.innerHTML = "";
+    const ic = el("span", { className: "ic" });
+    ic.innerHTML = icon(name);
+    b.append(ic, el("span", { textContent: text }));
+  };
+  fill("#go", "search", t("scan.search"));
+  // It was called "camera" while it toggled the running camera. Now it only appears when the
+  // camera is NOT running — then the button is an offer to try again.
+  fill("#camBtn", "camera", t("scan.cameraOn"));
+  $("#go").onclick = () => lookup($("#ean").value);
+  $("#camBtn").onclick = startCam;
+  $("#ean").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); lookup($("#ean").value); }
+  });
+
+  // boot() has already validated the token and filled ME; only the password path arrives here
+  // without it.
+  if (!ME) {
+    try {
+      ME = await api("/user/me/", { quiet: true });
+    } catch (e) {
+      return signOut(t("auth.expired"));
+    }
+  }
+  $("#who").textContent = ME.username || "";
+  $("#logout").innerHTML = icon("logout", 20);
+
+  const [locs, cats] = await LOCATIONS_PENDING;
+  LOCATIONS = (locs.results || locs || []).sort(
+    (a, b) => byName(a.pathstring, b.pathstring));
+  // Only leaves: a structural category refuses to hold parts, so offering it would produce an
+  // error at save time instead of a choice.
+  CATEGORIES = (cats.results || cats || [])
+    .filter((c) => !c.structural)
+    .sort((a, b) => byName(a.pathstring, b.pathstring));
+
+  // A reload should leave you where you were. Only a genuinely fresh session starts at the
+  // stock list.
+  if (!(await restoreView())) showTab("stock");
+  ready();
+}
+
+/* Android's back gesture, made to mean what it means everywhere else.
+
+   A page like this has exactly one history entry, so the system back button leaves the app on
+   the first press — from the detail page too, which is the one place it obviously should not.
+   The fix is to keep one spare entry permanently on top of the stack: back then pops that
+   instead of leaving, we get a popstate, and we decide what "back" means.
+
+   Order matters and mirrors what is visually on top: a lightbox closes first, then an open
+   form, then the detail page returns to the list. Only at the top level does back mean leave —
+   and then only on the second press within a couple of seconds, which is the convention
+   Android apps use and the reason a mis-swipe no longer costs you the page. */
+const HISTORY_GUARD = { vorrat: "guard" };
+let LEAVE_ARMED = false;
+
+function armHistory() {
+  try { history.pushState(HISTORY_GUARD, ""); } catch (e) { /* not fatal */ }
+}
+
+window.addEventListener("popstate", () => {
+  const lb = document.querySelector(".lightbox");
+  if (lb) { lb.remove(); armHistory(); return; }
+
+  // A form the app opened by itself is dismissed on the way past, not instead of navigating:
+  // spending a back press on something the user never opened reads as "nothing happened".
+  if (PANEL && !PANEL_AUTO) { closePanel(); armHistory(); return; }
+  if (PANEL) closePanel();
+
+  const detail = $("#view-detail");
+  // Nothing is pushed back here: this page's entry was created when it opened and is spent by
+  // this very back. One more spare entry would be exactly the one-too-many that once put the
+  // gesture out of step.
+  if (detail && !detail.hidden) { detailBack(); return; }
+
+  if (LEAVE_ARMED) {
+    /* Actually leave. Simply not re-arming is not enough and that was the bug: the press had
+       already been spent popping the guard, so the app stayed put and a THIRD press was
+       needed — while the hint promised the second would do it. Going back once more here is
+       what makes the promise true. Deferred out of the handler, because navigating from
+       inside a popstate is ignored by some engines. If there is nothing behind the app (a PWA
+       launched from the home screen), this is what closes it, which is the same intent. */
+    setTimeout(() => history.back(), 0);
+    return;
+  }
+
+  LEAVE_ARMED = true;
+  toast(t("nav.backAgainToLeave"));
+  setTimeout(() => { LEAVE_ARMED = false; }, 2500);
+  armHistory();
+});
+
+/* Three rungs, cheapest first. Rung 2 is the one that matters in practice: somebody who is
+   already signed in to InvenTree in this browser is carried straight through without ever
+   seeing a form — the session is silently traded for a token that then outlives it. */
+(async function boot() {
+  // Configuration before language (it carries the household's default), language before
+  // anything is drawn.
+  await loadConfig();
+  applyConfig();
+  await loadLanguage();
+  applyStatic(document);
+  drawLanguagePicker();
+
+  $("#mark").innerHTML = icon("box", 22);
+  $("#ver").textContent = "v" + VERSION;
+  $("#logout").onclick = () => signOut(null);
+  armHistory();
+
+  try { TOKEN = localStorage.getItem(TOKEN_KEY); } catch (e) { TOKEN = null; }
+
+  if (TOKEN) {
+    try {
+      ME = await api("/user/me/", { quiet: true });
+      return startApp();
+    } catch (e) { storeToken(null); ME = null; }
+  }
+
+  const fromSession = await mintToken(null);
+  if (fromSession) {
+    storeToken(fromSession);
+    try {
+      ME = await api("/user/me/", { quiet: true });
+      return startApp();
+    } catch (e) { storeToken(null); ME = null; }
+  }
+
+  showLogin(null);
+})();
+</script>
+</body>
+</html>

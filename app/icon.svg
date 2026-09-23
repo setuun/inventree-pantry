@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Pantry">
+  <rect width="512" height="512" rx="96" fill="#2e3440"/>
+  <g fill="none" stroke="#88c0d0" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M160 150h192v226a26 26 0 0 1-26 26H186a26 26 0 0 1-26-26z"/>
+    <path d="M186 150v-24a26 26 0 0 1 26-26h88a26 26 0 0 1 26 26v24"/>
+    <path d="M206 232h100M206 292h100M206 352h60"/>
+  </g>
+</svg>

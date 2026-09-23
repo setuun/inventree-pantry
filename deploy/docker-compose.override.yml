@@ -1,0 +1,10 @@
+# inventree-pantry: give InvenTree's own Caddy the app directory, read-only.
+#
+# Put this file next to InvenTree's docker-compose.yml (Compose merges an override file of this
+# name automatically) — or copy the one volume line into the inventree-proxy service by hand.
+# ${INVENTREE_EXT_VOLUME} is the same data directory the upstream compose file already uses;
+# tools/install.sh puts the app into its `vorrat/` subdirectory.
+services:
+  inventree-proxy:
+    volumes:
+      - ${INVENTREE_EXT_VOLUME}/vorrat:/var/www/vorrat:z,ro

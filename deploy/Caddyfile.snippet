@@ -1,0 +1,11 @@
+	# inventree-pantry: the phone front end at /vorrat/.
+	# Paste this into InvenTree's own Caddyfile, inside the site block, next to the
+	# `handle_path /static/*` and `handle_path /media/*` blocks that are already there.
+	# Same origin as the API — that is what lets the page trade an existing /web/ session for a
+	# token and keeps every call free of a CORS preflight.
+	redir /vorrat /vorrat/
+	handle_path /vorrat/* {
+		root * /var/www/vorrat
+		file_server
+		try_files {path} /index.html
+	}

@@ -1,0 +1,19 @@
+{
+  "name": "Vorrat",
+  "short_name": "Vorrat",
+  "description": "Einbuchen, verbrauchen, zählen — der Haushaltsteil von InvenTree.",
+  "lang": "de",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#2e3440",
+  "theme_color": "#2e3440",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
