@@ -42,11 +42,11 @@ rules that keep it working. Read them before you change anything.
 
 ## Commits
 
-This repository is public. Commit as `Simon Rudat <6574023+setuun@users.noreply.github.com>`,
+This repository is public. Commit as `setuun <6574023+setuun@users.noreply.github.com>`,
 never with a personal address. The setting lives in `.git/config` and does not travel with a
 clone, so on a fresh checkout run once:
 
-    git config user.name "Simon Rudat"
+    git config user.name "setuun"
     git config user.email "6574023+setuun@users.noreply.github.com"
 
 ## Checks
