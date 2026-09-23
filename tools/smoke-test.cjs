@@ -28,6 +28,7 @@ const APP = path.join(__dirname, "..", "app");
 const args = process.argv.slice(2);
 const SHOTS = args.includes("--shots") ? args[args.indexOf("--shots") + 1] : null;
 const FULL_PAGE = !args.includes("--viewport");
+const API_DELAY_MS = 150;
 
 // ---------------------------------------------------------------- fake InvenTree
 function freshDb() {
@@ -190,8 +191,11 @@ const server = http.createServer((req, res) => {
       try { parsed = body && req.headers["content-type"] === "application/json" ? JSON.parse(body) : body; }
       catch (e) { parsed = null; }
       const [status, data] = api(req.method, req.url, parsed);
-      res.writeHead(status, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify(data));
+      // A slow server, so that "the curtain lifts before the data" would be visible.
+      return setTimeout(() => {
+        res.writeHead(status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(data));
+      }, API_DELAY_MS);
     }
     const rel = decodeURIComponent(new URL(req.url, "http://x").pathname).replace(/^\/vorrat\/?/, "");
     if (rel === "config.json") {
@@ -253,6 +257,14 @@ async function walk(browser, lang, base) {
     await page.fill("#pw", "secret");
     await page.keyboard.press("Enter");
     await page.waitForSelector("#stocklist .rowlink", { timeout: 5000 });
+  });
+  // A hard reload with a stored token: the curtain must not lift before the list has its rows.
+  await step("reload", async () => {
+    await page.reload();
+    await page.waitForFunction(() => document.body.classList.contains("ready"), null,
+                               { timeout: 8000 });
+    const rows = await page.locator("#stocklist .rowlink").count();
+    if (!rows) throw new Error("curtain lifted before the stock list had any rows");
   });
   await step("stock-missing", () => tap("#shortbtn"));
   await step("detail-product", async () => { await tap("#shortbtn"); await tap('#stocklist [data-pk="20"]'); });

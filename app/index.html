@@ -75,11 +75,18 @@
     --radius: 14px;
   }
   * { box-sizing: border-box; }
+  /* The curtain: the app's mark over a spinner, on the page's own background, until the first
+     screen is drawn WITH its data. It fades rather than vanishing, and `visibility` flips only
+     after the fade, so it stops catching taps the moment it starts to go. */
   #boot {
     position: fixed; inset: 0; z-index: 60; background: var(--bg);
-    display: flex; align-items: center; justify-content: center;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px; transition: opacity .2s ease-out, visibility 0s linear .2s;
   }
-  body.ready #boot { display: none; }
+  #boot .bootmark { color: var(--accent); display: flex; }
+  #boot .bootmark svg { fill: currentColor; display: block; }
+  body.ready #boot { opacity: 0; visibility: hidden; pointer-events: none; }
+  @media (prefers-reduced-motion: reduce) { #boot { transition: none; } }
   .ring {
     width: 34px; height: 34px; border-radius: 50%;
     border: 3px solid var(--line); border-top-color: var(--accent);
@@ -417,7 +424,12 @@
      renders the stock list first and only then swings over to the page you were actually on:
      restoring a detail view has to put its list up behind it, and then fetch. It is markup
      rather than something the script creates, so it is on screen from the first paint. -->
-<div id="boot"><div class="ring" role="status" data-i18n-aria-label="common.loading"></div></div>
+<div id="boot">
+  <!-- Written out rather than drawn by the script: the curtain has to look right from the very
+       first paint, before any script has run. Same path as ICON.box. -->
+  <span class="bootmark"><svg viewBox="0 0 24 24" width="56" height="56" aria-hidden="true"><path d="M20 2H4c-1 0-2 .9-2 2v3.01c0 .72.43 1.34 1 1.69V20c0 1.1 1.1 2 2 2h14c.9 0 2-.9 2-2V8.7c.57-.35 1-.97 1-1.69V4c0-1.1-1-2-2-2zm-5 12H9v-2h6v2zm5-7H4V4h16v3z"/></svg></span>
+  <div class="ring" role="status" data-i18n-aria-label="common.loading"></div>
+</div>
 
 <!-- Text in the markup is marked, not written: `data-i18n` fills textContent, and
      `data-i18n-<attribute>` fills that attribute. applyStatic() does both, once at boot and
@@ -549,7 +561,7 @@
      location     ("Lagerort")  where it lies
    In InvenTree's own words a requirement is a template part and a variety is its variant. */
 
-const VERSION = "2.0.1";
+const VERSION = "2.0.2";
 
 // --- tiny helpers ------------------------------------------------------------
 const $ = (s) => document.querySelector(s);
@@ -843,8 +855,9 @@ function apiError(data, status) {
   return String(status);
 }
 
-/* Raise the curtain. Called from exactly two places — once the restored page is on screen,
-   and when the login card goes up instead — so there is no path that leaves it stuck. */
+/* Raise the curtain. Called once the restored page is on screen with its data, or when the
+   login card goes up instead — and, as a last resort, by a timer in boot(), so no failure
+   anywhere can leave the curtain down. */
 function ready() {
   document.body.classList.add("ready");
 }
@@ -886,6 +899,9 @@ function showLogin(msg) {
     go.textContent = t("auth.login");
     if (!token) return toast(t("auth.failed"), true);
     storeToken(token);
+    // Curtain down again while the app loads, so a first sign-in looks like every later start:
+    // one clean change from the curtain to a filled page.
+    document.body.classList.remove("ready");
     startApp();
   };
   go.onclick = submit;
@@ -3457,6 +3473,10 @@ async function startApp() {
     api("/stock/location/?limit=500"),
     api("/part/category/?limit=500"),
   ]);
+  /* The lists' data, started now and awaited before the curtain goes up. Without it the first
+     screen was drawn "cold" — empty cards saying "loading" under a curtain that had already
+     lifted. A failure here is not fatal: the list then shows its own error, as before. */
+  const firstData = loadStockData().catch(() => null);
   document.querySelector("main").innerHTML = APP_HTML;
   applyStatic(document.querySelector("main"));
   document.querySelector("nav").hidden = false;
@@ -3528,6 +3548,8 @@ async function startApp() {
     .filter((c) => !c.structural)
     .sort((a, b) => byName(a.pathstring, b.pathstring));
 
+  await firstData;
+
   // A reload should leave you where you were. Only a genuinely fresh session starts at the
   // stock list.
   if (!(await restoreView())) showTab("stock");
@@ -3595,6 +3617,7 @@ window.addEventListener("popstate", () => {
   await loadLanguage();
   applyStatic(document);
   drawLanguagePicker();
+  setTimeout(ready, 15000);
 
   $("#mark").innerHTML = icon("box", 22);
   $("#ver").textContent = "v" + VERSION;

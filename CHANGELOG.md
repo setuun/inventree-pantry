@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.2 (2026-09-23)
+
+- Loading: the start-up curtain now stays until the first screen has its data, instead of
+  lifting onto empty "loading" cards. It shows the app's mark over the spinner and fades out;
+  a first sign-in goes through the same curtain. A 15-second safety timer lifts it whatever
+  happens. The smoke test reloads against a slow fake API and fails if the list is still
+  empty when the curtain goes.
+
 ## 2.0.1 (2026-09-23)
 
 - Header: the language code sat a few pixels above the name and the sign-out icon (the
