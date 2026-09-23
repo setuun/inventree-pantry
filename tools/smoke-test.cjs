@@ -29,6 +29,9 @@ const args = process.argv.slice(2);
 const SHOTS = args.includes("--shots") ? args[args.indexOf("--shots") + 1] : null;
 const FULL_PAGE = !args.includes("--viewport");
 const API_DELAY_MS = 150;
+// Writes are slower still, so a button that gave no sign of working would be caught.
+const WRITE_DELAY_MS = 700;
+let WRITES = [];
 
 // ---------------------------------------------------------------- fake InvenTree
 function freshDb() {
@@ -133,7 +136,10 @@ function api(method, url, body) {
     const part = partByPk(Number(m[1]));
     if (!part) return [404, { detail: "Not found." }];
     if (method === "PATCH" && body && typeof body === "object") Object.assign(part, body);
-    if (method === "DELETE") DB.parts = DB.parts.filter((x) => x !== part);
+    if (method === "DELETE") {
+      DB.parts = DB.parts.filter((x) => x !== part);
+      DB.stock = DB.stock.filter((st) => st.part !== part.pk);
+    }
     return [200, part];
   }
 
@@ -190,12 +196,16 @@ const server = http.createServer((req, res) => {
       let parsed = null;
       try { parsed = body && req.headers["content-type"] === "application/json" ? JSON.parse(body) : body; }
       catch (e) { parsed = null; }
-      const [status, data] = api(req.method, req.url, parsed);
+      // A bug in this stand-in must fail the test, not kill the server under it.
+      let status, data;
+      try { [status, data] = api(req.method, req.url, parsed); }
+      catch (e) { [status, data] = [500, { detail: "fake API: " + e.message }]; }
+      if (req.method !== "GET") WRITES.push(req.method + " " + req.url.split("?")[0]);
       // A slow server, so that "the curtain lifts before the data" would be visible.
       return setTimeout(() => {
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify(data));
-      }, API_DELAY_MS);
+      }, req.method === "GET" ? API_DELAY_MS : WRITE_DELAY_MS);
     }
     const rel = decodeURIComponent(new URL(req.url, "http://x").pathname).replace(/^\/vorrat\/?/, "");
     if (rel === "config.json") {
@@ -291,6 +301,37 @@ async function walk(browser, lang, base) {
     await page.waitForSelector("#result .card .btn.primary");
   });
   await step("scan-create", () => tap("#result .card .btn.primary"));
+  // Loading states on buttons: a slow write must show a spinner, and a double tap must not
+  // book twice.
+  await step("busy-book-in", async () => {
+    await tap("#tab-stock");
+    await tap('#stocklist [data-pk="20"]');
+    await page.waitForSelector("#detail .actions");
+    await tap("#detail .actions .btn.primary");
+    const ok = page.locator("#detail .panel .buttons .btn.primary");
+    WRITES = [];
+    await ok.click();
+    await ok.click({ force: true, timeout: 1000 }).catch(() => {});   // the impatient second tap
+    await page.waitForTimeout(350);
+    const state = await ok.evaluate((b) => ({ busy: b.classList.contains("busy"), disabled: b.disabled,
+                                             cancel: b.nextElementSibling.disabled }));
+    if (!state.busy || !state.disabled) throw new Error("no spinner while booking: " + JSON.stringify(state));
+    if (!state.cancel) throw new Error("cancel stayed enabled while booking");
+    await shot("busy-spinner");
+    await page.waitForFunction(() => !document.querySelector("#detail .panel .btn.busy"), null, { timeout: 6000 });
+    const posts = WRITES.filter((w) => /\/stock\/(add\/)?$/.test(w)).length;
+    if (posts !== 1) throw new Error("expected one booking, got " + posts + ": " + WRITES.join(", "));
+  });
+  await step("busy-delete", async () => {
+    await tap("#detail .detailhead .warnink");
+    const ok = page.locator("#detail .panel .buttons .btn.danger");
+    await ok.click();
+    await page.waitForTimeout(350);
+    if (!(await ok.evaluate((b) => b.classList.contains("busy")).catch(() => false))) {
+      throw new Error("no spinner while deleting");
+    }
+    await page.waitForFunction(() => !document.querySelector(".btn.busy"), null, { timeout: 8000 });
+  });
   await step("language-switch", async () => {
     const other = lang === "en" ? "de" : "en";
     await page.selectOption("#lang", other);

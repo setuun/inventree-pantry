@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0 (2026-09-23)
+
+- **Loading states on every button that waits for the server**: sign-in, barcode search,
+  every form's confirm button (create, book in, use up, count, save batch, save article,
+  split, both deletes), the staple suggestions, "new staple", and the photo upload (a spinner
+  over the picture). The button is locked at once, a spinner replaces its label after 150 ms,
+  and its Cancel is locked alongside. After a successful action the spinner stays until the
+  page has been redrawn, so an impatient second tap cannot book the same thing twice.
+- A form's own checks ("name is missing") no longer leave the confirm button disabled.
+- The smoke test books and deletes against a slow fake API and fails without a spinner or
+  with a double booking.
+
 ## 2.0.2 (2026-09-23)
 
 - Loading: the start-up curtain now stays until the first screen has its data, instead of

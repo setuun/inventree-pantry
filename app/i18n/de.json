@@ -16,7 +16,6 @@
   "auth.username": "Benutzername",
   "auth.password": "Passwort",
   "auth.login": "Anmelden",
-  "auth.loggingIn": "Anmelden …",
   "auth.logout": "Abmelden",
   "auth.missing": "Benutzername und Passwort angeben",
   "auth.failed": "Anmeldung fehlgeschlagen",

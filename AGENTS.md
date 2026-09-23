@@ -37,7 +37,12 @@ rules that keep it working. Read them before you change anything.
 7. **The same numbers in two places stay in one file.** The expiry rule (`expiry.*`) and the
    pack-size parameter name live in `pantry.json`, which the app, the plugin, the taxonomy
    script and the watchdog all read. Do not hard-code them anywhere.
-8. **Bump `VERSION`** in `app/index.html` (and `PLUGIN_VERSION` in the plugin, if it changed)
+8. **Every button that waits for the server goes through `withBusy()`.** It disables the
+   button at once and shows a spinner after 150 ms. Pass `hold` when the action ends by
+   redrawing the view without awaiting it, and signal a validation error by throwing (the
+   message becomes the toast and the button comes back). The smoke test books against a slow
+   fake API and fails if no spinner shows.
+9. **Bump `VERSION`** in `app/index.html` (and `PLUGIN_VERSION` in the plugin, if it changed)
    and add a `CHANGELOG.md` entry for anything user-visible.
 
 ## Commits

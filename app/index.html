@@ -417,6 +417,40 @@
   }
   @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
   .err { color: var(--bad); }
+
+  /* A button that is waiting for the server. Its label turns transparent — so the button keeps
+     its exact size and the row does not jump — and a ring spins where the label was, in the
+     colour the label had (--busy-ink, set per button style below). Added only after a short
+     delay by withBusy(), so a fast answer never flickers. */
+  button.btn { --busy-ink: var(--ink); }
+  button.btn.primary { --busy-ink: var(--accent-ink); }
+  button.btn.danger { --busy-ink: rgba(0, 0, 0, 0.87); }
+  .suggest button.btn { --busy-ink: var(--accent); }
+  button.btn:disabled { cursor: default; }
+  /* Locked while a neighbour works (the Cancel next to a busy Save) — it should look it. */
+  button.btn:disabled:not(.busy) { opacity: .45; }
+  button.btn.busy { position: relative; color: transparent !important; }
+  button.btn.busy::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+    border: 2px solid var(--busy-ink); border-right-color: transparent;
+    animation: spin .7s linear infinite;
+  }
+  /* The same ring over a product picture while it uploads. */
+  .thumbwrap { position: relative; }
+  .thumbwrap.busy::after {
+    content: ""; position: absolute; inset: 0; border-radius: 10px;
+    background: rgba(18, 18, 18, 0.6);
+  }
+  .thumbwrap.busy::before {
+    content: ""; position: absolute; left: 50%; top: 50%; z-index: 1;
+    width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
+    border: 2px solid var(--accent); border-right-color: transparent;
+    animation: spin .7s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    button.btn.busy::after, .thumbwrap.busy::before { animation: none; opacity: .7; }
+  }
 </style>
 </head>
 <body>
@@ -561,7 +595,7 @@
      location     ("Lagerort")  where it lies
    In InvenTree's own words a requirement is a template part and a variety is its variant. */
 
-const VERSION = "2.0.2";
+const VERSION = "2.1.0";
 
 // --- tiny helpers ------------------------------------------------------------
 const $ = (s) => document.querySelector(s);
@@ -757,6 +791,46 @@ function toast(msg, isError) {
   setTimeout(() => box.remove(), isError ? 7000 : 2600);
 }
 
+/* Run `fn` while `btn` shows that it is working.
+
+   The button is disabled at once — a second tap must not send a second request — but the
+   spinner only appears after 150 ms: most answers are faster than that, and a spinner that
+   flashes for one frame reads as a glitch rather than as feedback. `also` are buttons that must
+   not be pressed meanwhile either (the Cancel next to a Save). A button that is already busy
+   ignores the tap.
+
+   `hold`: for actions that end by redrawing the view WITHOUT waiting for it (most forms call
+   showPart() and return). Restoring the button the moment `fn` resolves would hand it back
+   while the old view is still up, and a second tap would book the same thing twice. So on
+   success it stays busy until the redraw takes it off the page — with a 10-second backstop,
+   so a redraw that fails cannot leave it locked. A failure (an exception, including the
+   form's own "name is missing") always restores it at once. */
+async function withBusy(btn, fn, also, hold) {
+  if (btn.disabled) return undefined;
+  const others = (also || []).filter((b) => b && !b.disabled);
+  btn.disabled = true;
+  for (const b of others) b.disabled = true;
+  btn.setAttribute("aria-busy", "true");
+  const timer = setTimeout(() => btn.classList.add("busy"), 150);
+  const restore = () => {
+    clearTimeout(timer);
+    btn.classList.remove("busy");
+    btn.removeAttribute("aria-busy");
+    btn.disabled = false;
+    for (const b of others) b.disabled = false;
+  };
+  let result;
+  try {
+    result = await fn();
+  } catch (e) {
+    restore();
+    throw e;
+  }
+  if (hold) setTimeout(() => { if (btn.isConnected) restore(); }, 10000);
+  else restore();
+  return result;
+}
+
 /* --- auth: one login, then a year of silence --------------------------------
    The page keeps an InvenTree API token in localStorage and sends it as
    `Authorization: Token …`.
@@ -890,13 +964,9 @@ function showLogin(msg) {
 
   const submit = async () => {
     if (!u.value || !pw.value) return toast(t("auth.missing"), true);
-    go.disabled = true;
-    go.textContent = t("auth.loggingIn");
     // btoa() is Latin-1 only; encodeURIComponent/unescape widens a UTF-8 password first.
     const basic = "Basic " + btoa(unescape(encodeURIComponent(u.value + ":" + pw.value)));
-    const token = await mintToken(basic);
-    go.disabled = false;
-    go.textContent = t("auth.login");
+    const token = await withBusy(go, () => mintToken(basic));
     if (!token) return toast(t("auth.failed"), true);
     storeToken(token);
     // Curtain down again while the app loads, so a first sign-in looks like every later start:
@@ -1478,16 +1548,24 @@ function thumbPicker(part, onDone) {
     if (!f) return;            // the user backed out of the camera
 
     toast(t("photo.saving"));
-    const prepared = await prepareImage(f);
-    const fd = new FormData();
-    fd.append("image", prepared, prepared.name || "foto.jpg");
+    // The picture itself carries the spinner, and both picture buttons are locked: shrinking
+    // a phone photo and sending it can take several seconds on a weak connection.
+    wrap.classList.add("busy");
+    const locked = (result.buttons || []).filter((b) => !b.disabled);
+    for (const b of locked) b.disabled = true;
     try {
+      const prepared = await prepareImage(f);
+      const fd = new FormData();
+      fd.append("image", prepared, prepared.name || "foto.jpg");
       await api("/part/" + part.pk + "/", { method: "PATCH", body: fd });
       IMG_CACHE.clear();
       toast(t("photo.saved"));
       onDone();
     } catch (e) {
       toast(t("photo.failed", { error: e.message }), true);
+    } finally {
+      wrap.classList.remove("busy");
+      for (const b of locked) b.disabled = false;
     }
   };
 
@@ -1512,7 +1590,9 @@ function thumbPicker(part, onDone) {
 
   const wrap = el("div", { className: "thumbwrap" });
   wrap.append(img, ph, gallery, camera);
-  return { wrap: wrap, img: img, ph: ph, pick: pick, shoot: shoot };
+  // `buttons` is filled in by the caller with the two picture buttons it draws.
+  const result = { wrap: wrap, img: img, ph: ph, pick: pick, shoot: shoot, buttons: [] };
+  return result;
 }
 
 /* Full-screen view of the picture. Deliberately trivial: an overlay, the image, and any tap
@@ -1577,10 +1657,8 @@ function panelButtons(panel, okText, onOk, danger) {
                             textContent: okText });
   const no = el("button", { className: "btn ghost", textContent: t("common.cancel") });
   no.onclick = closePanel;
-  ok.onclick = async () => {
-    ok.disabled = true;
-    try { await onOk(); } catch (e) { toast(e.message, true); ok.disabled = false; }
-  };
+  // Validation inside onOk throws (see withBusy): the message is shown and the button comes back.
+  ok.onclick = () => withBusy(ok, onOk, [no], true).catch((e) => toast(e.message, true));
   const r = el("div", { className: "buttons" });
   r.append(ok, no);
   panel.append(r);
@@ -1797,26 +1875,26 @@ function panelNewArticle(host, code) {
     refresh();
 
     panelButtons(p, t("common.create"), async () => {
-      if (!name.value.trim()) { toast(t("error.nameMissing"), true); return; }
-      const created = await api("/part/", {
-        method: "POST",
-        body: {
-          name: name.value.trim(), description: "", category: Number(cat.value),
-          variant_of: req.value ? Number(req.value) : null,
-          purchaseable: true, active: true, minimum_stock: 0,
-        },
+      if (!name.value.trim()) throw new Error(t("error.nameMissing"));
+    const created = await api("/part/", {
+      method: "POST",
+      body: {
+        name: name.value.trim(), description: "", category: Number(cat.value),
+        variant_of: req.value ? Number(req.value) : null,
+        purchaseable: true, active: true, minimum_stock: 0,
+      },
+    });
+    PARTS.set(created.pk, created);
+    try {
+      await api("/barcode/link/", {
+        method: "POST", body: { barcode: code, part: created.pk },
       });
-      PARTS.set(created.pk, created);
-      try {
-        await api("/barcode/link/", {
-          method: "POST", body: { barcode: code, part: created.pk },
-        });
-      } catch (e) {
-        toast(t("article.linkFailed", { error: e.message }), true);
-      }
-      $("#ean").value = "";
-      toast(t("article.createdLinked"));
-      openPart(created.pk, "scan");
+    } catch (e) {
+      toast(t("article.linkFailed", { error: e.message }), true);
+    }
+    $("#ean").value = "";
+    toast(t("article.createdLinked"));
+    openPart(created.pk, "scan");
     });
   });
 }
@@ -1872,7 +1950,7 @@ async function showPart(pk) {
   head.append(txt);
   head.append(pencilButton(t("article.edit"), () => panelArticle(c, part, items)));
   head.append(trashButton(part.is_template ? t("requirement.delete") : t("article.delete"),
-                          () => panelDeletePart(c, part, items)));
+                        () => panelDeletePart(c, part, items)));
   c.append(head);
 
   if (thumb) {
@@ -1880,6 +1958,7 @@ async function showPart(pk) {
     const choose = labelButton("ghost", "image", part.image ? t("photo.change") : t("photo.choose"));
     shoot.onclick = thumb.shoot;
     choose.onclick = thumb.pick;
+    thumb.buttons.push(shoot, choose);
     const picks = el("div", { className: "buttons" });
     picks.append(shoot, choose);
     c.append(picks);
@@ -1895,7 +1974,7 @@ async function showPart(pk) {
   const fact = (k, v) => {
     const d = el("div");
     d.append(el("span", { className: "k", textContent: k }),
-             el("span", { className: "v", textContent: v }));
+           el("span", { className: "v", textContent: v }));
     facts.append(d);
   };
   const have = isRequirement ? Number(part.total_in_stock || 0) : Number(part.in_stock || 0);
@@ -1905,7 +1984,7 @@ async function showPart(pk) {
     fact(t("detail.kind"), t("detail.kindRequirement"));
   } else {
     const bn = part.variant_of ? ((PARTS.get(part.variant_of) || {}).full_name
-                                  || (PARTS.get(part.variant_of) || {}).name) : null;
+                                || (PARTS.get(part.variant_of) || {}).name) : null;
     fact(t("field.requirement"), bn || t("detail.unassigned"));
   }
 
@@ -1925,8 +2004,8 @@ async function showPart(pk) {
     d.append(el("span", { className: "k", textContent: t("detail.deviation") }));
     const shown = (diff > 0 ? "+" : "") + fmtQty(diff, unit);
     d.append(el("span", {
-      className: "v " + (diff < 0 ? "short" : "fine"),
-      textContent: diff < 0 ? t("detail.deviationShort", { amount: shown }) : shown,
+    className: "v " + (diff < 0 ? "short" : "fine"),
+    textContent: diff < 0 ? t("detail.deviationShort", { amount: shown }) : shown,
     }));
     facts.append(d);
   }
@@ -1937,7 +2016,7 @@ async function showPart(pk) {
   // "location", it means where the stuff is, and setting it moves the stock.
   const where = [...new Set(items.map((i) => locName(i.location)))];
   fact(t("field.location"), where.length ? where.join(", ")
-                 : (part.default_location ? locName(part.default_location) : "—"));
+               : (part.default_location ? locName(part.default_location) : "—"));
   if (part.default_expiry) {
     fact(t("detail.defaultExpiry"), t("days.count", { n: part.default_expiry }));
   }
@@ -1955,61 +2034,59 @@ async function showPart(pk) {
     const sim = similarProducts(part.name, part.pk);
 
     if (sug.length || sim.length) {
-      const sc = el("div", { className: "card" });
-      sc.append(el("h2", { className: "sec", textContent: t("suggest.heading") }));
+    const sc = el("div", { className: "card" });
+    sc.append(el("h2", { className: "sec", textContent: t("suggest.heading") }));
 
-      if (sug.length) {
-        sc.append(el("div", {
-          className: "hint",
-          textContent: t("suggest.unassigned") + " " + t("suggest.pickOne"),
-        }));
-        const row = el("div", { className: "suggest" });
-        for (const cand of sug) {
-          const btn = el("button", {
-            className: "btn", textContent: cand.t.full_name || cand.t.name,
+    if (sug.length) {
+      sc.append(el("div", {
+        className: "hint",
+        textContent: t("suggest.unassigned") + " " + t("suggest.pickOne"),
+      }));
+      const row = el("div", { className: "suggest" });
+      for (const cand of sug) {
+        const btn = el("button", {
+          className: "btn", textContent: cand.t.full_name || cand.t.name,
+        });
+        btn.title = cand.why;
+        btn.onclick = () => withBusy(btn, async () => {
+          await api("/part/" + part.pk + "/", {
+            method: "PATCH", body: { variant_of: cand.t.pk, minimum_stock: 0 },
           });
-          btn.title = cand.why;
-          btn.onclick = async () => {
-            btn.disabled = true;
-            try {
-              await api("/part/" + part.pk + "/", {
-                method: "PATCH", body: { variant_of: cand.t.pk, minimum_stock: 0 },
-              });
-              PARTS.set(part.pk, Object.assign({}, part, { variant_of: cand.t.pk }));
-              toast(t("suggest.assigned", { name: cand.t.full_name || cand.t.name }));
-              showPart(part.pk);
-            } catch (e) { toast(e.message, true); btn.disabled = false; }
-          };
-          row.append(btn);
-        }
+          PARTS.set(part.pk, Object.assign({}, part, { variant_of: cand.t.pk }));
+          toast(t("suggest.assigned", { name: cand.t.full_name || cand.t.name }));
+          showPart(part.pk);
+        }, [...row.querySelectorAll("button")].filter((b) => b !== btn), true)
+          .catch((e) => toast(e.message, true));
+        row.append(btn);
+      }
+      sc.append(row);
+    }
+
+    if (sim.length) {
+      sc.append(el("div", {
+        className: "hint",
+        textContent: (sug.length ? "" : t("suggest.unassigned") + " ")
+                   + t("suggest.similar"),
+      }));
+      for (const cand of sim) {
+        const row = el("button", { className: "btn ghost buyrow" });
+        const who = el("div", { className: "grow" });
+        who.append(el("div", { textContent: cand.p.full_name || cand.p.name }));
+        who.append(el("div", {
+          className: "meta",
+          textContent: t("stock.have", { amount: fmtQty(Number(cand.p.in_stock || 0), unitsOf(cand.p)) })
+                     + (cand.p.variant_of ? " · " + (requirementName(cand.p.pk) || "") : ""),
+        }));
+        row.append(who);
+        const chev = el("div", { className: "chev" });
+        chev.innerHTML = icon("chevron", 24);
+        row.append(chev);
+        row.onclick = () => openPart(cand.p.pk, "detail");
         sc.append(row);
       }
+    }
 
-      if (sim.length) {
-        sc.append(el("div", {
-          className: "hint",
-          textContent: (sug.length ? "" : t("suggest.unassigned") + " ")
-                     + t("suggest.similar"),
-        }));
-        for (const cand of sim) {
-          const row = el("button", { className: "btn ghost buyrow" });
-          const who = el("div", { className: "grow" });
-          who.append(el("div", { textContent: cand.p.full_name || cand.p.name }));
-          who.append(el("div", {
-            className: "meta",
-            textContent: t("stock.have", { amount: fmtQty(Number(cand.p.in_stock || 0), unitsOf(cand.p)) })
-                       + (cand.p.variant_of ? " · " + (requirementName(cand.p.pk) || "") : ""),
-          }));
-          row.append(who);
-          const chev = el("div", { className: "chev" });
-          chev.innerHTML = icon("chevron", 24);
-          row.append(chev);
-          row.onclick = () => openPart(cand.p.pk, "detail");
-          sc.append(row);
-        }
-      }
-
-      host.append(sc);
+    host.append(sc);
     }
   }
 
@@ -2026,8 +2103,8 @@ async function showPart(pk) {
     li.append(el("div", { className: "meta", textContent: locName(it.location) }));
     // Panels anchor to the row, so a form always opens under what it edits.
     li.append(rowFoot(it,
-      () => panelBatch(li, part, it, () => showPart(part.pk)),
-      () => panelDelete(li, it, () => showPart(part.pk))));
+    () => panelBatch(li, part, it, () => showPart(part.pk)),
+    () => panelDelete(li, it, () => showPart(part.pk))));
     ul.append(li);
   }
   bc.append(ul);
@@ -2038,43 +2115,43 @@ async function showPart(pk) {
      Without this, buying a brand once and running out would make it disappear for good. */
   if (isRequirement) {
     const kids = [...PARTS.values()]
-      .filter((x) => x.variant_of === part.pk)
-      .sort((a, b) => byName(a.name, b.name));
+    .filter((x) => x.variant_of === part.pk)
+    .sort((a, b) => byName(a.name, b.name));
 
     const kc = el("div", { className: "card" });
     kc.append(el("h2", { className: "sec", textContent: t("detail.varieties") }));
 
     if (!kids.length) {
-      kc.append(el("div", { className: "hint", textContent: t("detail.noVarieties") }));
+    kc.append(el("div", { className: "hint", textContent: t("detail.noVarieties") }));
     }
     for (const k of kids) {
-      const row = el("button", { className: "btn ghost buyrow" });
+    const row = el("button", { className: "btn ghost buyrow" });
 
-      const name = k.full_name || k.name;
-      const mini = el("img", { className: "mini", alt: "", hidden: true });
-      const miniPh = el("div", {
-        className: "mini empty", textContent: (name[0] || "?").toUpperCase(),
-      });
-      row.append(mini, miniPh);
-      // ⚠️ `thumbnail` is never empty — InvenTree substitutes its own blank graphic for a part
-      // without a picture. `image` is the honest field, so it decides whether there is one.
-      const src = k.image ? (k.thumbnail || k.image) : null;
-      if (src) authImage(mini, src).then((ok) => { if (ok) miniPh.hidden = true; });
+    const name = k.full_name || k.name;
+    const mini = el("img", { className: "mini", alt: "", hidden: true });
+    const miniPh = el("div", {
+      className: "mini empty", textContent: (name[0] || "?").toUpperCase(),
+    });
+    row.append(mini, miniPh);
+    // ⚠️ `thumbnail` is never empty — InvenTree substitutes its own blank graphic for a part
+    // without a picture. `image` is the honest field, so it decides whether there is one.
+    const src = k.image ? (k.thumbnail || k.image) : null;
+    if (src) authImage(mini, src).then((ok) => { if (ok) miniPh.hidden = true; });
 
-      const who = el("div", { className: "grow" });
-      who.append(el("div", { textContent: name }));
-      const have = Number(k.in_stock || 0);
-      who.append(el("div", {
-        className: "meta",
-        textContent: have ? t("stock.have", { amount: fmtQty(have, unitsOf(k)) }) : t("stock.outOfStock"),
-      }));
-      row.append(who);
-      const chev = el("div", { className: "chev" });
-      chev.innerHTML = icon("chevron", 24);
-      row.append(chev);
-      row.onclick = () => openPart(k.pk, "detail");
-      row.dataset.pk = String(k.pk);
-      kc.append(row);
+    const who = el("div", { className: "grow" });
+    who.append(el("div", { textContent: name }));
+    const have = Number(k.in_stock || 0);
+    who.append(el("div", {
+      className: "meta",
+      textContent: have ? t("stock.have", { amount: fmtQty(have, unitsOf(k)) }) : t("stock.outOfStock"),
+    }));
+    row.append(who);
+    const chev = el("div", { className: "chev" });
+    chev.innerHTML = icon("chevron", 24);
+    row.append(chev);
+    row.onclick = () => openPart(k.pk, "detail");
+    row.dataset.pk = String(k.pk);
+    kc.append(row);
     }
     host.append(kc);
   }
@@ -2102,72 +2179,72 @@ function panelBookIn(card, part, items, auto) {
     const u = unitsOf(part);
     const qty = qtySelect(null, 1);          // packets when measured, pieces when counted
     /* The crisis shelf first, always. Putting things away there is the normal case; the
-       kitchen is the exception you pick deliberately. The part's own default and an existing
-       batch's place are only fallbacks for a house that has no such shelf. */
+     kitchen is the exception you pick deliberately. The part's own default and an existing
+     batch's place are only fallbacks for a house that has no such shelf. */
     const preferred =
-      (LOCATIONS.find((l) => l.pathstring === BOOK_LOCATION
-                          || l.name === BOOK_LOCATION) || {}).pk
-      || part.default_location || (items[0] && items[0].location)
-      || (LOCATIONS.find((l) => l.name === DEFAULT_LOCATION) || {}).pk;
+    (LOCATIONS.find((l) => l.pathstring === BOOK_LOCATION
+                        || l.name === BOOK_LOCATION) || {}).pk
+    || part.default_location || (items[0] && items[0].location)
+    || (LOCATIONS.find((l) => l.name === DEFAULT_LOCATION) || {}).pk;
     const loc = locSelect(preferred);
     // Pre-filled from the part's own default_expiry, i.e. from the category table. The common
     // case is therefore "leave it", and correcting it is still one tap.
     const mhd = dateField(t("field.bestBefore"),
-                          part.default_expiry ? isoInDays(part.default_expiry) : "");
+                        part.default_expiry ? isoInDays(part.default_expiry) : "");
 
     /* The content is its own field even when it is known. It is the number the whole
-       measurement hangs on, and Open Food Facts is regularly wrong for bulk packs — this is where
-       you correct it, at the moment you are holding the packet. */
+     measurement hangs on, and Open Food Facts is regularly wrong for bulk packs — this is where
+     you correct it, at the moment you are holding the packet. */
     let content = null;
     if (u) {
-      content = el("input", { type: "number", step: "0.001", min: "0" });
-      const known = packOf(part);
-      if (known != null) content.value = String(known);
-      const sum = el("div", { className: "hint" });
-      const recalc = () => {
-        const c = Number(content.value);
-        sum.textContent = c > 0
-          ? fmtNum(qty.value) + " × " + fmtQty(c, u) + " = " + fmtQty(Number(qty.value) * c, u)
-          : t("book.packQuestion");
-      };
-      qty.onchange = recalc;
-      content.oninput = recalc;
-      recalc();
-      p.append(field(t("field.packets"), qty),
-               field(t("field.packContent") + " (" + unitLabel(u) + ")", content), sum);
+    content = el("input", { type: "number", step: "0.001", min: "0" });
+    const known = packOf(part);
+    if (known != null) content.value = String(known);
+    const sum = el("div", { className: "hint" });
+    const recalc = () => {
+      const c = Number(content.value);
+      sum.textContent = c > 0
+        ? fmtNum(qty.value) + " × " + fmtQty(c, u) + " = " + fmtQty(Number(qty.value) * c, u)
+        : t("book.packQuestion");
+    };
+    qty.onchange = recalc;
+    content.oninput = recalc;
+    recalc();
+    p.append(field(t("field.packets"), qty),
+             field(t("field.packContent") + " (" + unitLabel(u) + ")", content), sum);
     } else {
-      p.append(field(t("field.quantity"), qty));
+    p.append(field(t("field.quantity"), qty));
     }
     p.append(field(t("field.location"), loc), mhd.wrap);
     panelButtons(p, t("book.confirm"), async () => {
-      const perPack = u ? Number(content.value) : 0;
-      if (u && !(perPack > 0)) return toast(t("book.packMissing"), true);
-      const amount = u ? Number(qty.value) * perPack : Number(qty.value);
-      const locPk = Number(loc.value);
-      const want = mhd.input.value || null;
-      // Only merge into an existing row when the date matches too. Adding a fresh jar to a
-      // batch with a different MHD would quietly destroy the older date, which is the one
-      // piece of information this whole app exists to keep.
-      const same = items.find((i) => i.location === locPk
-                    && (i.expiry_date || null) === want);
-      if (same) {
-        await api("/stock/add/", {
-          method: "POST",
-          body: { items: [{ pk: same.pk, quantity: amount }], notes: t("stock.note") },
-        });
-      } else {
-        const body = { part: part.pk, quantity: amount, location: locPk };
-        if (want) body.expiry_date = want;
-        await api("/stock/", { method: "POST", body: body });
-      }
-      if (u) await savePack(part, perPack);
-      toast(t("book.done", { amount: fmtQty(amount, u) }));
-      /* The scan field still holds the barcode that got us here. Leaving it there means the
-         next scan types into a field that already has something in it, and a mis-scan silently
-         looks up the previous article again. Booked in = that barcode is dealt with. */
-      const ean = $("#ean");
-      if (ean) ean.value = "";
-      showPart(part.pk);
+    const perPack = u ? Number(content.value) : 0;
+    if (u && !(perPack > 0)) throw new Error(t("book.packMissing"));
+    const amount = u ? Number(qty.value) * perPack : Number(qty.value);
+    const locPk = Number(loc.value);
+    const want = mhd.input.value || null;
+    // Only merge into an existing row when the date matches too. Adding a fresh jar to a
+    // batch with a different MHD would quietly destroy the older date, which is the one
+    // piece of information this whole app exists to keep.
+    const same = items.find((i) => i.location === locPk
+                  && (i.expiry_date || null) === want);
+    if (same) {
+      await api("/stock/add/", {
+        method: "POST",
+        body: { items: [{ pk: same.pk, quantity: amount }], notes: t("stock.note") },
+      });
+    } else {
+      const body = { part: part.pk, quantity: amount, location: locPk };
+      if (want) body.expiry_date = want;
+      await api("/stock/", { method: "POST", body: body });
+    }
+    if (u) await savePack(part, perPack);
+    toast(t("book.done", { amount: fmtQty(amount, u) }));
+    /* The scan field still holds the barcode that got us here. Leaving it there means the
+       next scan types into a field that already has something in it, and a mis-scan silently
+       looks up the previous article again. Booked in = that barcode is dealt with. */
+    const ean = $("#ean");
+    if (ean) ean.value = "";
+    showPart(part.pk);
     });
   }, auto);
 }
@@ -2178,19 +2255,19 @@ function panelAdjust(card, part, items, kind) {
   openPanel(card, (p) => {
     const pick = el("select");
     items.forEach((i, idx) => pick.append(el("option", {
-      value: String(idx),
-      textContent: fmtQty(i.quantity, unitsOf(part)) + " · " + locName(i.location)
-                 + (i.expiry_date ? " · " + fmtDate(i.expiry_date) : ""),
+    value: String(idx),
+    textContent: fmtQty(i.quantity, unitsOf(part)) + " · " + locName(i.location)
+               + (i.expiry_date ? " · " + fmtDate(i.expiry_date) : ""),
     })));
 
     // The quantity dropdown depends on which batch is selected (counting defaults to what is
     // recorded there), so it is rebuilt rather than merely re-valued.
     const qtyBox = el("div");
     const drawQty = () => {
-      const it = items[Number(pick.value)];
-      qtyBox.innerHTML = "";
-      qtyBox.append(field(qtyLabel(part, counting ? t("count.actual") : t("field.quantity")),
-                          qtyControl(part, it.quantity, counting ? it.quantity : 1)));
+    const it = items[Number(pick.value)];
+    qtyBox.innerHTML = "";
+    qtyBox.append(field(qtyLabel(part, counting ? t("count.actual") : t("field.quantity")),
+                        qtyControl(part, it.quantity, counting ? it.quantity : 1)));
     };
     pick.onchange = drawQty;
 
@@ -2199,16 +2276,16 @@ function panelAdjust(card, part, items, kind) {
     drawQty();
 
     panelButtons(p, counting ? t("count.confirm") : t("use.confirm"), async () => {
-      const it = items[Number(pick.value)];
-      // A select for counted articles, an input for measured ones — both carry .value.
-      const qty = qtyBox.querySelector("select, input").value;
-      await api("/stock/" + kind + "/", {
-        method: "POST",
-        body: { items: [{ pk: it.pk, quantity: qty }], notes: t("stock.note") },
-      });
-      const amount = fmtQty(qty, unitsOf(part));
-      toast(counting ? t("count.done", { amount: amount }) : t("use.done", { amount: amount }));
-      showPart(part.pk);
+    const it = items[Number(pick.value)];
+    // A select for counted articles, an input for measured ones — both carry .value.
+    const qty = qtyBox.querySelector("select, input").value;
+    await api("/stock/" + kind + "/", {
+      method: "POST",
+      body: { items: [{ pk: it.pk, quantity: qty }], notes: t("stock.note") },
+    });
+    const amount = fmtQty(qty, unitsOf(part));
+    toast(counting ? t("count.done", { amount: amount }) : t("use.done", { amount: amount }));
+    showPart(part.pk);
     });
   });
 }
@@ -2218,8 +2295,8 @@ function panelAdjust(card, part, items, kind) {
 function panelBatch(host, part, item, after) {
   openPanel(host, (p) => {
     p.append(el("div", {
-      className: "hint",
-      textContent: fmtQty(item.quantity, unitsOf(part)) + " · " + locName(item.location),
+    className: "hint",
+    textContent: fmtQty(item.quantity, unitsOf(part)) + " · " + locName(item.location),
     }));
     const qty = qtyControl(part, item.quantity, item.quantity);
     const loc = locSelect(item.location);
@@ -2227,37 +2304,37 @@ function panelBatch(host, part, item, after) {
     p.append(field(qtyLabel(part, t("field.quantity")), qty), field(t("field.location"), loc), mhd.wrap);
 
     panelButtons(p, t("common.save"), async () => {
-      if (Number(loc.value) !== Number(item.location)) {
-        await api("/stock/transfer/", {
-          method: "POST",
-          body: {
-            items: [{ pk: item.pk, quantity: item.quantity }],
-            location: Number(loc.value),
-            notes: t("stock.note"),
-          },
-        });
-      }
-      if (Number(qty.value) !== Number(item.quantity)) {
-        await api("/stock/count/", {
-          method: "POST",
-          body: { items: [{ pk: item.pk, quantity: qty.value }], notes: t("stock.note") },
-        });
-      }
-      if ((item.expiry_date || "") !== (mhd.input.value || "")) {
-        await api("/stock/" + item.pk + "/", {
-          method: "PATCH", body: { expiry_date: mhd.input.value || null },
-        });
-      }
-      toast(t("common.saved"));
-      after();
+    if (Number(loc.value) !== Number(item.location)) {
+      await api("/stock/transfer/", {
+        method: "POST",
+        body: {
+          items: [{ pk: item.pk, quantity: item.quantity }],
+          location: Number(loc.value),
+          notes: t("stock.note"),
+        },
+      });
+    }
+    if (Number(qty.value) !== Number(item.quantity)) {
+      await api("/stock/count/", {
+        method: "POST",
+        body: { items: [{ pk: item.pk, quantity: qty.value }], notes: t("stock.note") },
+      });
+    }
+    if ((item.expiry_date || "") !== (mhd.input.value || "")) {
+      await api("/stock/" + item.pk + "/", {
+        method: "PATCH", body: { expiry_date: mhd.input.value || null },
+      });
+    }
+    toast(t("common.saved"));
+    after();
     });
 
     // Nothing to split off a single unit.
     if (Number(item.quantity) > 1) {
-      const sp = el("button", { className: "btn ghost", textContent: t("split.open") });
-      sp.style.marginTop = "8px";
-      sp.onclick = () => panelSplit(host, part, item, after);
-      p.append(sp);
+    const sp = el("button", { className: "btn ghost", textContent: t("split.open") });
+    sp.style.marginTop = "8px";
+    sp.onclick = () => panelSplit(host, part, item, after);
+    p.append(sp);
     }
   });
 }
@@ -2275,9 +2352,9 @@ function panelBatch(host, part, item, after) {
 function panelArticle(host, part, items) {
   openPanel(host, (p) => {
     /* The name is editable because the packet size lives in it — "Apfelmus (700 g)" is a
-       guess at a shelf, and the day it turns out to be a 1-kg tub both the name and the target
-       want correcting. Keeping that behind the admin UI would mean the list ossifies at
-       whatever I assumed when I wrote it. */
+     guess at a shelf, and the day it turns out to be a 1-kg tub both the name and the target
+     want correcting. Keeping that behind the admin UI would mean the list ossifies at
+     whatever I assumed when I wrote it. */
     const name = el("input", { type: "text", value: part.name || "" });
     name.placeholder = t("field.name");
 
@@ -2286,47 +2363,47 @@ function panelArticle(host, part, items) {
 
     const unit = unitsOf(part);
     const targetInput = el("input", { type: "number",
-                               value: Number(part.minimum_stock || 0) || "" });
+                             value: Number(part.minimum_stock || 0) || "" });
     targetInput.min = "0";
     targetInput.step = unit ? "0.25" : "1";
     if (!unit) targetInput.inputMode = "numeric";
     targetInput.placeholder = t("article.targetPlaceholder");
 
     /* The unit belongs to the requirement, not the brand: measuring happens where the target
-       is. Changing it here does NOT convert the stock — whoever turns pieces into kilograms has
-       to recount the batches, which is exactly why the hint underneath says so. */
+     is. Changing it here does NOT convert the stock — whoever turns pieces into kilograms has
+     to recount the batches, which is exactly why the hint underneath says so. */
     let unitSel = null;
     if (part.is_template) {
-      unitSel = unitSelect();
-      unitSel.value = part.units || "";
-      unitSel.onchange = () => { targetInput.step = unitSel.value ? "0.25" : "1"; };
+    unitSel = unitSelect();
+    unitSel.value = part.units || "";
+    unitSel.onchange = () => { targetInput.step = unitSel.value ? "0.25" : "1"; };
     }
 
     /* The pack content belongs to the product: "one packet of rice" is 1 kg or 18 kg depending
-       on the brand, and this number is what turns booking in into kilograms. */
+     on the brand, and this number is what turns booking in into kilograms. */
     let packInput = null;
     if (unit && !part.is_template) {
-      packInput = el("input", { type: "number", step: "0.001", min: "0" });
-      const known = packOf(part);
-      if (known != null) packInput.value = String(known);
-      packInput.placeholder = t("article.packPlaceholder", { example: fmtNum(0.5) });
+    packInput = el("input", { type: "number", step: "0.001", min: "0" });
+    const known = packOf(part);
+    if (known != null) packInput.value = String(known);
+    packInput.placeholder = t("article.packPlaceholder", { example: fmtNum(0.5) });
     }
 
     /* Which requirement this product serves. The whole point of the two levels: the target lives on
-       the requirement, so two brands of pasta are short together or not at all. A requirement itself
-       cannot be assigned to another one — one level of grouping is enough for a pantry and
-       two would be a tree nobody maintains. */
+     the requirement, so two brands of pasta are short together or not at all. A requirement itself
+     cannot be assigned to another one — one level of grouping is enough for a pantry and
+     two would be a tree nobody maintains. */
     let reqSelect = null;
     if (!part.is_template) {
-      reqSelect = el("select");
-      reqSelect.append(el("option", { value: "", textContent: t("requirement.none") }));
-      for (const tpl of [...PARTS.values()].filter((x) => x.is_template)
-                         .sort((a, b) => byName(a.name, b.name))) {
-        reqSelect.append(el("option", { value: String(tpl.pk),
-                                     textContent: tpl.full_name || tpl.name }));
-      }
-      reqSelect.append(el("option", { value: "+", textContent: t("requirement.createOption") }));
-      reqSelect.value = part.variant_of ? String(part.variant_of) : "";
+    reqSelect = el("select");
+    reqSelect.append(el("option", { value: "", textContent: t("requirement.none") }));
+    for (const tpl of [...PARTS.values()].filter((x) => x.is_template)
+                       .sort((a, b) => byName(a.name, b.name))) {
+      reqSelect.append(el("option", { value: String(tpl.pk),
+                                   textContent: tpl.full_name || tpl.name }));
+    }
+    reqSelect.append(el("option", { value: "+", textContent: t("requirement.createOption") }));
+    reqSelect.value = part.variant_of ? String(part.variant_of) : "";
     }
 
     const newName = el("input", { type: "text", value: "" });
@@ -2334,25 +2411,25 @@ function panelArticle(host, part, items) {
     const newWrap = field(t("requirement.new"), newName);
     newWrap.hidden = true;
     if (reqSelect) {
-      reqSelect.onchange = () => {
-        newWrap.hidden = reqSelect.value !== "+";
-        if (!newWrap.hidden && !newName.value) {
-          /* A first guess, to be corrected rather than trusted. Everything in brackets is
-             dropped first — that is where brands and marketing live ("Bio Rote Bete Saft
-             (Nur Nur Natur)"), and taking the longest word without dropping it suggested
-             "Natur)", punctuation and all. Of what remains, the longest word is usually the
-             thing itself. */
-          const guess = words(part.name).filter(strongWord);
-          newName.value = guess.sort((a, b) => b.length - a.length)[0] || part.name || "";
-        }
-      };
+    reqSelect.onchange = () => {
+      newWrap.hidden = reqSelect.value !== "+";
+      if (!newWrap.hidden && !newName.value) {
+        /* A first guess, to be corrected rather than trusted. Everything in brackets is
+           dropped first — that is where brands and marketing live ("Bio Rote Bete Saft
+           (Nur Nur Natur)"), and taking the longest word without dropping it suggested
+           "Natur)", punctuation and all. Of what remains, the longest word is usually the
+           thing itself. */
+        const guess = words(part.name).filter(strongWord);
+        newName.value = guess.sort((a, b) => b.length - a.length)[0] || part.name || "";
+      }
+    };
     }
 
     const here = [...new Set(items.map((i) => i.location))];
     const loc = locSelect(here.length === 1 ? here[0] : part.default_location);
     if (here.length > 1) {
-      loc.prepend(el("option", { value: "", textContent: t("article.keepLocations") }));
-      loc.value = "";
+    loc.prepend(el("option", { value: "", textContent: t("article.keepLocations") }));
+    loc.value = "";
     }
 
     const hint = (key) => p.append(el("div", { className: "hint", textContent: t(key) }));
@@ -2360,7 +2437,7 @@ function panelArticle(host, part, items) {
     if (reqSelect) { p.append(field(t("field.requirement"), reqSelect), newWrap); }
     if (unitSel) p.append(field(t("field.unit"), unitSel));
     p.append(field(unit ? t("field.targetOptionalUnit", { unit: unitLabel(unit) })
-                        : t("field.targetOptional"), targetInput));
+                      : t("field.targetOptional"), targetInput));
     if (packInput) p.append(field(t("field.packContent") + " (" + unitLabel(unit) + ")", packInput));
     if (unit) hint("article.quarterHint");
     p.append(field(t("field.location"), loc));
@@ -2369,63 +2446,63 @@ function panelArticle(host, part, items) {
     if (here.length > 1) hint("article.movesAll");
 
     panelButtons(p, t("common.save"), async () => {
-      const target = loc.value ? Number(loc.value) : null;
+    const target = loc.value ? Number(loc.value) : null;
 
-      // A new requirement is created first, so the product can be pointed at it in one save.
-      let variantTarget;
-      if (reqSelect) {
-        if (reqSelect.value === "+") {
-          const nm = newName.value.trim();
-          if (!nm) { toast(t("requirement.nameMissing"), true); return; }
-          const created = await api("/part/", {
-            method: "POST",
-            body: {
-              name: nm, description: t("requirement.description"), category: part.category,
-              is_template: true, purchaseable: true, active: true,
-              minimum_stock: Number(targetInput.value || 0),
-            },
-          });
-          variantTarget = created.pk;
-          PARTS.set(created.pk, created);
-        } else {
-          variantTarget = reqSelect.value ? Number(reqSelect.value) : null;
-        }
-      }
-
-      if (!name.value.trim()) { toast(t("error.nameEmpty"), true); return; }
-      const patch = {
-        name: name.value.trim(),
-        description: desc.value,
-        // Empty means "no target"; InvenTree stores that as 0, which is also what makes the
-        // article drop out of low_stock and out of the Fehlt filter.
-        minimum_stock: targetInput.value === "" ? 0
-                     : (unitSel ? unitSel.value : unit) ? roundTarget(targetInput.value)
-                     : Number(targetInput.value),
-      };
-      if (unitSel) patch.units = unitSel.value;
-      if (target) patch.default_location = target;
-      if (reqSelect) {
-        patch.variant_of = variantTarget;
-        // With a requirement in charge, a per-brand target would double-count: the requirement already
-        // carries the number, and the brand would show up as short on its own.
-        if (variantTarget) patch.minimum_stock = 0;
-      }
-      await api("/part/" + part.pk + "/", { method: "PATCH", body: patch });
-      if (packInput && packInput.value !== "") await savePack(part, Number(packInput.value));
-
-      const moving = items.filter((i) => i.location !== target);
-      if (target && moving.length) {
-        await api("/stock/transfer/", {
+    // A new requirement is created first, so the product can be pointed at it in one save.
+    let variantTarget;
+    if (reqSelect) {
+      if (reqSelect.value === "+") {
+        const nm = newName.value.trim();
+        if (!nm) throw new Error(t("requirement.nameMissing"));
+        const created = await api("/part/", {
           method: "POST",
           body: {
-            items: moving.map((i) => ({ pk: i.pk, quantity: i.quantity })),
-            location: target,
-            notes: t("stock.note"),
+            name: nm, description: t("requirement.description"), category: part.category,
+            is_template: true, purchaseable: true, active: true,
+            minimum_stock: Number(targetInput.value || 0),
           },
         });
+        variantTarget = created.pk;
+        PARTS.set(created.pk, created);
+      } else {
+        variantTarget = reqSelect.value ? Number(reqSelect.value) : null;
       }
-      toast(t("common.saved"));
-      showPart(part.pk);
+    }
+
+    if (!name.value.trim()) throw new Error(t("error.nameEmpty"));
+    const patch = {
+      name: name.value.trim(),
+      description: desc.value,
+      // Empty means "no target"; InvenTree stores that as 0, which is also what makes the
+      // article drop out of low_stock and out of the Fehlt filter.
+      minimum_stock: targetInput.value === "" ? 0
+                   : (unitSel ? unitSel.value : unit) ? roundTarget(targetInput.value)
+                   : Number(targetInput.value),
+    };
+    if (unitSel) patch.units = unitSel.value;
+    if (target) patch.default_location = target;
+    if (reqSelect) {
+      patch.variant_of = variantTarget;
+      // With a requirement in charge, a per-brand target would double-count: the requirement already
+      // carries the number, and the brand would show up as short on its own.
+      if (variantTarget) patch.minimum_stock = 0;
+    }
+    await api("/part/" + part.pk + "/", { method: "PATCH", body: patch });
+    if (packInput && packInput.value !== "") await savePack(part, Number(packInput.value));
+
+    const moving = items.filter((i) => i.location !== target);
+    if (target && moving.length) {
+      await api("/stock/transfer/", {
+        method: "POST",
+        body: {
+          items: moving.map((i) => ({ pk: i.pk, quantity: i.quantity })),
+          location: target,
+          notes: t("stock.note"),
+        },
+      });
+    }
+    toast(t("common.saved"));
+    showPart(part.pk);
     });
   });
 }
@@ -2442,39 +2519,39 @@ function panelDeletePart(host, part, items) {
 
   openPanel(host, (p) => {
     if (part.is_template && kids.length) {
-      p.append(el("div", {
-        className: "err",
-        textContent: t("requirement.hasProducts", {
-          n: kids.length, names: kids.map((k) => k.full_name || k.name).join(", "),
-        }),
-      }));
-      const ok = el("button", { className: "btn ghost", textContent: t("common.understood") });
-      ok.onclick = closePanel;
-      const r = el("div", { className: "buttons" });
-      r.append(ok);
-      p.append(r);
-      return;
+    p.append(el("div", {
+      className: "err",
+      textContent: t("requirement.hasProducts", {
+        n: kids.length, names: kids.map((k) => k.full_name || k.name).join(", "),
+      }),
+    }));
+    const ok = el("button", { className: "btn ghost", textContent: t("common.understood") });
+    ok.onclick = closePanel;
+    const r = el("div", { className: "buttons" });
+    r.append(ok);
+    p.append(r);
+    return;
     }
 
     const total = items.reduce((n, i) => n + Number(i.quantity), 0);
     p.append(el("div", {
-      className: "hint",
-      textContent: t(part.is_template ? "delete.requirement" : "delete.article", { name: part.name })
-                 + (total ? " " + t("delete.stockLost", { amount: fmtQty(total, unitsOf(part)) }) : "")
-                 + " " + t("delete.irreversible"),
+    className: "hint",
+    textContent: t(part.is_template ? "delete.requirement" : "delete.article", { name: part.name })
+               + (total ? " " + t("delete.stockLost", { amount: fmtQty(total, unitsOf(part)) }) : "")
+               + " " + t("delete.irreversible"),
     }));
     panelButtons(p, t("delete.confirm"), async () => {
-      for (const it of items) await api("/stock/" + it.pk + "/", { method: "DELETE" });
-      // InvenTree refuses to delete an active part, so it is retired first.
-      await api("/part/" + part.pk + "/", { method: "PATCH", body: { active: false } });
-      await api("/part/" + part.pk + "/", { method: "DELETE" });
-      toast(t("delete.done"));
-      PARTS.delete(part.pk);
-      LOW_STOCK.delete(part.pk);
-      // Deleted means there is no way back to this page, not even through the stack.
-      DETAIL_STACK.length = 0;
-      DETAIL_PK = null;
-      showTab(DETAIL_FROM);
+    for (const it of items) await api("/stock/" + it.pk + "/", { method: "DELETE" });
+    // InvenTree refuses to delete an active part, so it is retired first.
+    await api("/part/" + part.pk + "/", { method: "PATCH", body: { active: false } });
+    await api("/part/" + part.pk + "/", { method: "DELETE" });
+    toast(t("delete.done"));
+    PARTS.delete(part.pk);
+    LOW_STOCK.delete(part.pk);
+    // Deleted means there is no way back to this page, not even through the stack.
+    DETAIL_STACK.length = 0;
+    DETAIL_PK = null;
+    showTab(DETAIL_FROM);
     }, true);
   });
 }
@@ -2487,16 +2564,16 @@ function panelDeletePart(host, part, items) {
 function panelDelete(host, item, after) {
   openPanel(host, (p) => {
     p.append(el("div", {
-      className: "hint",
-      textContent: t(item.expiry_date ? "delete.batchDated" : "delete.batch", {
-        what: fmtQty(item.quantity, unitsOf(PARTS.get(item.part))) + " · " + locName(item.location),
-        date: fmtDate(item.expiry_date),
-      }) + " " + t("delete.irreversible"),
+    className: "hint",
+    textContent: t(item.expiry_date ? "delete.batchDated" : "delete.batch", {
+      what: fmtQty(item.quantity, unitsOf(PARTS.get(item.part))) + " · " + locName(item.location),
+      date: fmtDate(item.expiry_date),
+    }) + " " + t("delete.irreversible"),
     }));
     panelButtons(p, t("delete.confirm"), async () => {
-      await api("/stock/" + item.pk + "/", { method: "DELETE" });
-      toast(t("delete.batchDone"));
-      after();
+    await api("/stock/" + item.pk + "/", { method: "DELETE" });
+    toast(t("delete.batchDone"));
+    after();
     }, true);
   });
 }
@@ -2513,43 +2590,43 @@ function panelSplit(host, part, item, after) {
   openPanel(host, (p) => {
     const max = Number(item.quantity);
     p.append(el("div", {
-      className: "hint",
-      textContent: t(item.expiry_date ? "split.fromDated" : "split.from", {
-        what: fmtQty(item.quantity, unitsOf(part)) + " · " + locName(item.location),
-        date: fmtDate(item.expiry_date),
-      }),
+    className: "hint",
+    textContent: t(item.expiry_date ? "split.fromDated" : "split.from", {
+      what: fmtQty(item.quantity, unitsOf(part)) + " · " + locName(item.location),
+      date: fmtDate(item.expiry_date),
+    }),
     }));
 
     const u = unitsOf(part);
     let qty;
     if (u) {
-      qty = el("input", { type: "number", step: "0.01", min: "0", max: String(max) });
-      qty.value = String(Math.round(max * 50) / 100);   // half, as the obvious suggestion
+    qty = el("input", { type: "number", step: "0.01", min: "0", max: String(max) });
+    qty.value = String(Math.round(max * 50) / 100);   // half, as the obvious suggestion
     } else {
-      qty = el("select");
-      for (let i = 1; i < max; i++) {
-        qty.append(el("option", { value: String(i), textContent: fmtNum(i) }));
-      }
-      qty.value = "1";
+    qty = el("select");
+    for (let i = 1; i < max; i++) {
+      qty.append(el("option", { value: String(i), textContent: fmtNum(i) }));
+    }
+    qty.value = "1";
     }
 
     const mhd = dateField(
-      t("split.newDate"),
-      part.default_expiry ? isoInDays(part.default_expiry) : (item.expiry_date || ""));
+    t("split.newDate"),
+    part.default_expiry ? isoInDays(part.default_expiry) : (item.expiry_date || ""));
     p.append(field(u ? t("split.howMuchUnit", { unit: unitLabel(u) }) : t("split.howMany"), qty),
-             mhd.wrap);
+           mhd.wrap);
 
     panelButtons(p, t("split.confirm"), async () => {
-      const n = qty.value;
-      const body = { part: item.part, quantity: n, location: item.location };
-      if (mhd.input.value) body.expiry_date = mhd.input.value;
-      await api("/stock/", { method: "POST", body: body });
-      await api("/stock/remove/", {
-        method: "POST",
-        body: { items: [{ pk: item.pk, quantity: n }], notes: t("split.note") },
-      });
-      toast(t("split.done", { amount: fmtQty(n, u) }));
-      after();
+    const n = qty.value;
+    const body = { part: item.part, quantity: n, location: item.location };
+    if (mhd.input.value) body.expiry_date = mhd.input.value;
+    await api("/stock/", { method: "POST", body: body });
+    await api("/stock/remove/", {
+      method: "POST",
+      body: { items: [{ pk: item.pk, quantity: n }], notes: t("split.note") },
+    });
+    toast(t("split.done", { amount: fmtQty(n, u) }));
+    after();
     });
   });
 }
@@ -2600,7 +2677,7 @@ async function startCam() {
   }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" }, audio: false,
+    video: { facingMode: "environment" }, audio: false,
     });
   } catch (e) {
     $("#camHint").hidden = false;
@@ -2619,14 +2696,14 @@ async function startCam() {
   const tick = async () => {
     if (!scanning) return;
     try {
-      const codes = await det.detect(v);
-      if (codes.length) {
-        const code = codes[0].rawValue;
-        $("#ean").value = code;
-        stopCam();
-        lookup(code);
-        return;
-      }
+    const codes = await det.detect(v);
+    if (codes.length) {
+      const code = codes[0].rawValue;
+      $("#ean").value = code;
+      stopCam();
+      lookup(code);
+      return;
+    }
     } catch (e) { /* a dropped frame is not an error worth surfacing */ }
     requestAnimationFrame(tick);
   };
@@ -2676,7 +2753,7 @@ function matchesQuery(pd, path, query) {
   // Name, description and place all count: on a phone you search for "tomaten", for "bio"
   // (which the OFF plugin writes into keywords and often the description) or for "keller".
   const hay = [(pd || {}).full_name, (pd || {}).name, (pd || {}).description, (pd || {}).IPN,
-               path].filter(Boolean).join(" ").toLowerCase();
+             path].filter(Boolean).join(" ").toLowerCase();
   return hay.includes(q);
 }
 
@@ -2714,26 +2791,26 @@ function articleEntries(over) {
     const tpl = LOW_STOCK.get(requirementOf(pk));
     const own = target ? Math.max(0, target - total) : 0;
     entries.push({
-      pk: pk, pd: pd, batches: batches, total: total, target: target,
-      places: [...new Set(batches.map((i) => locName(i.location)))],
-      requirement: requirementName(pk),
-      missing: own || (tpl ? Math.max(0, targetOf(tpl) - Number(tpl.total_in_stock || 0)) : 0),
-      first: batches[0].expiry_date || "9999-12-31",
+    pk: pk, pd: pd, batches: batches, total: total, target: target,
+    places: [...new Set(batches.map((i) => locName(i.location)))],
+    requirement: requirementName(pk),
+    missing: own || (tpl ? Math.max(0, targetOf(tpl) - Number(tpl.total_in_stock || 0)) : 0),
+    first: batches[0].expiry_date || "9999-12-31",
     });
   }
 
 
   return entries
     .filter((e) => {
-      if (wantShort && !e.missing) return false;
-      if (wantPlace && !e.places.some((pl) => matchesPlace(pl, wantPlace))) return false;
-      if (wantQuery && !matchesQuery(e.pd, e.places.join(" "), wantQuery)) return false;
-      return true;
+    if (wantShort && !e.missing) return false;
+    if (wantPlace && !e.places.some((pl) => matchesPlace(pl, wantPlace))) return false;
+    if (wantQuery && !matchesQuery(e.pd, e.places.join(" "), wantQuery)) return false;
+    return true;
     })
     .sort((a, b) => {
-      // Shortfalls first — if you opened the list to see what is missing, that is the answer.
-      if (!!b.missing !== !!a.missing) return b.missing ? 1 : -1;
-      return a.first < b.first ? -1 : a.first > b.first ? 1 : 0;
+    // Shortfalls first — if you opened the list to see what is missing, that is the answer.
+    if (!!b.missing !== !!a.missing) return b.missing ? 1 : -1;
+    return a.first < b.first ? -1 : a.first > b.first ? 1 : 0;
     });
 }
 
@@ -2752,8 +2829,8 @@ function drawChips() {
     // the tree reads rather than the way the rows are stored.
     const parts = locName(it.location).split("/");
     for (let i = 1; i <= parts.length; i++) {
-      const key = parts.slice(0, i).join("/");
-      counts.set(key, (counts.get(key) || 0) + 1);
+    const key = parts.slice(0, i).join("/");
+    counts.set(key, (counts.get(key) || 0) + 1);
     }
   }
 
@@ -2763,9 +2840,9 @@ function drawChips() {
   for (const l of LOCATIONS) {
     const n = counts.get(l.pathstring) || 0;
     if (n) {
-      sel.append(el("option", {
-        value: l.pathstring, textContent: l.pathstring + " (" + n + ")",
-      }));
+    sel.append(el("option", {
+      value: l.pathstring, textContent: l.pathstring + " (" + n + ")",
+    }));
     }
   }
   // A place that no longer holds anything drops out of the list, so the filter drops with it.
@@ -2780,7 +2857,7 @@ function drawChips() {
   const ic = el("span", { className: "ic" });
   ic.innerHTML = icon("alert", 18);
   btn.append(ic, el("span", { textContent: t("stock.missingToggle") }),
-             el("span", { className: "n", textContent: fmtNum(short) }));
+           el("span", { className: "n", textContent: fmtNum(short) }));
   btn.setAttribute("aria-pressed", String(STOCK_SHORT));
   btn.disabled = !short && !STOCK_SHORT;
   btn.style.opacity = btn.disabled ? "0.45" : "";
@@ -2805,11 +2882,11 @@ function shoppingEntries() {
     const target = targetOf(part);
     if (!target || have >= target) continue;
     out.push({
-      pk: part.pk, pd: part, total: have, target: target, missing: target - have,
-      template: !!part.is_template,
-      places: [...new Set(STOCK_ALL
-        .filter((i) => i.part === part.pk || requirementOf(i.part) === part.pk)
-        .map((i) => locName(i.location)))],
+    pk: part.pk, pd: part, total: have, target: target, missing: target - have,
+    template: !!part.is_template,
+    places: [...new Set(STOCK_ALL
+      .filter((i) => i.part === part.pk || requirementOf(i.part) === part.pk)
+      .map((i) => locName(i.location)))],
     });
   }
   return out.sort((a, b) => byName(a.pd.name, b.pd.name));
@@ -2826,8 +2903,8 @@ function drawStocktake() {
 
   if (!entries.length) {
     box.append(hintCard(!STOCK_ALL.length && !LOW_STOCK.size ? t("stock.emptyAll")
-      : STOCK_SHORT ? t("stock.nothingMissing")
-      : STOCK_QUERY ? t("common.noResults") : t("stock.emptyHere")));
+    : STOCK_SHORT ? t("stock.nothingMissing")
+    : STOCK_QUERY ? t("common.noResults") : t("stock.emptyHere")));
     return;
   }
 
@@ -2843,8 +2920,8 @@ function drawStocktake() {
   c.append(el("h2", {
     className: "sec",
     textContent: (STOCK_SHORT ? t("stock.headingShort") : t("stock.heading"))
-               + " · " + nArticles(entries.length)
-               + (batchCount > entries.length ? " · " + t("count.batches", { n: batchCount }) : ""),
+             + " · " + nArticles(entries.length)
+             + (batchCount > entries.length ? " · " + t("count.batches", { n: batchCount }) : ""),
   }));
   const ul = el("ul", { className: "stock" });
 
@@ -2859,29 +2936,29 @@ function drawStocktake() {
     const who = el("div", { className: "who" });
     who.append(el("div", { className: "nm", textContent: name }));
     who.append(el("div", {
-      className: "meta",
-      textContent: (e.target ? t("stock.haveOfTarget", {
-                    have: fmtQty(e.total, unitsOf(e.pd)), target: fmtQty(e.target, unitsOf(e.pd)),
-                  }) : fmtQty(e.total, unitsOf(e.pd)))
-                 + (e.requirement ? " · " + e.requirement : "")
-                 + (e.places.length ? " · " + (e.places.length === 1 ? e.places[0]
-                                               : t("count.places", { n: e.places.length })) : ""),
+    className: "meta",
+    textContent: (e.target ? t("stock.haveOfTarget", {
+                  have: fmtQty(e.total, unitsOf(e.pd)), target: fmtQty(e.target, unitsOf(e.pd)),
+                }) : fmtQty(e.total, unitsOf(e.pd)))
+               + (e.requirement ? " · " + e.requirement : "")
+               + (e.places.length ? " · " + (e.places.length === 1 ? e.places[0]
+                                             : t("count.places", { n: e.places.length })) : ""),
     }));
 
     const dates = el("div", { className: "dates" });
     if (e.missing) {
-      dates.append(el("span", { className: "pill bad",
-                                textContent: t("stock.missingAmount", { amount: fmtQty(e.missing, unitsOf(e.pd)) }) }));
+    dates.append(el("span", { className: "pill bad",
+                              textContent: t("stock.missingAmount", { amount: fmtQty(e.missing, unitsOf(e.pd)) }) }));
     }
     if (e.batches.length) {
-      dates.append(expiryPill(e.batches[0].expiry_date));
-      if (e.batches.length > 1) {
-        dates.append(el("span", {
-          className: "pill", textContent: t("stock.moreBatches", { n: e.batches.length - 1 }),
-        }));
-      }
+    dates.append(expiryPill(e.batches[0].expiry_date));
+    if (e.batches.length > 1) {
+      dates.append(el("span", {
+        className: "pill", textContent: t("stock.moreBatches", { n: e.batches.length - 1 }),
+      }));
+    }
     } else {
-      dates.append(el("span", { className: "pill", textContent: t("stock.noStock") }));
+    dates.append(el("span", { className: "pill", textContent: t("stock.noStock") }));
     }
     who.append(dates);
     row.append(who);
@@ -2994,8 +3071,8 @@ function buyText(entries) {
   for (const e of entries) {
     const u = unitsOf(e.pd);
     lines.push(t("buy.textLine", {
-      name: e.pd.full_name || t("article.fallbackName", { pk: e.pk }),
-      missing: fmtQty(e.missing, u), have: fmtQty(e.total, u), target: fmtQty(e.target, u),
+    name: e.pd.full_name || t("article.fallbackName", { pk: e.pk }),
+    missing: fmtQty(e.missing, u), have: fmtQty(e.total, u), target: fmtQty(e.target, u),
     }));
   }
   return lines.join("\n");
@@ -3011,10 +3088,10 @@ function buyText(entries) {
 async function shareList(text) {
   if (navigator.share) {
     try {
-      await navigator.share({ title: t("buy.heading"), text: text });
-      return;
+    await navigator.share({ title: t("buy.heading"), text: text });
+    return;
     } catch (e) {
-      if (e && e.name === "AbortError") return;   // the user closed the sheet; not a failure
+    if (e && e.name === "AbortError") return;   // the user closed the sheet; not a failure
     }
   }
   await copyList(text);
@@ -3040,11 +3117,11 @@ function allRequirements() {
     const have = Number(part.total_in_stock ?? 0);
     const target = targetOf(part);
     out.push({
-      pk: part.pk, pd: part, total: have, target: target,
-      missing: target ? Math.max(0, target - have) : 0, template: true,
-      places: [...new Set(STOCK_ALL
-        .filter((i) => requirementOf(i.part) === part.pk)
-        .map((i) => locName(i.location)))],
+    pk: part.pk, pd: part, total: have, target: target,
+    missing: target ? Math.max(0, target - have) : 0, template: true,
+    places: [...new Set(STOCK_ALL
+      .filter((i) => requirementOf(i.part) === part.pk)
+      .map((i) => locName(i.location)))],
     });
   }
   return out.sort((a, b) => byName(a.pd.name, b.pd.name));
@@ -3075,7 +3152,7 @@ function drawBuy() {
   const controls = $("#buycontrols");
   controls.innerHTML = "";
   const tog = labelButton("ghost", BUY_ALL ? "cart" : "list",
-                          BUY_ALL ? t("buy.onlyMissing") : t("buy.allRequirements"));
+                        BUY_ALL ? t("buy.onlyMissing") : t("buy.allRequirements"));
   tog.onclick = () => { BUY_ALL = !BUY_ALL; drawBuy(); };
   const neu = labelButton("ghost", "plus", t("requirement.new"));
   neu.onclick = () => { DETAIL_FROM = "buy"; showTab("new"); };
@@ -3085,15 +3162,15 @@ function drawBuy() {
   box.append(el("h2", {
     className: "sec",
     textContent: (BUY_ALL ? t("buy.allRequirements") : t("buy.heading"))
-               + (BUY_QUERY ? " · " + t("count.hits", { n: entries.length }) : ""),
+             + (BUY_QUERY ? " · " + t("count.hits", { n: entries.length }) : ""),
   }));
 
   if (!entries.length) {
     box.append(el("div", {
-      className: "hint",
-      textContent: BUY_QUERY ? t("common.noResults")
-        : BUY_ALL ? t("buy.noRequirements")
-        : t("buy.complete"),
+    className: "hint",
+    textContent: BUY_QUERY ? t("common.noResults")
+      : BUY_ALL ? t("buy.noRequirements")
+      : t("buy.complete"),
     }));
     return;
   }
@@ -3104,18 +3181,18 @@ function drawBuy() {
     const who = el("div", { className: "grow" });
     who.append(el("div", { textContent: e.pd.full_name || t("article.fallbackName", { pk: e.pk }) }));
     who.append(el("div", {
-      className: "meta",
-      textContent: (e.target ? t("buy.haveOfTarget", {
-                                  have: fmtQty(e.total, unitsOf(e.pd)),
-                                  target: fmtQty(e.target, unitsOf(e.pd)),
-                                })
-                              : t("buy.noTarget"))
-                 + (e.places.length ? " · " + e.places.join(", ") : ""),
+    className: "meta",
+    textContent: (e.target ? t("buy.haveOfTarget", {
+                                have: fmtQty(e.total, unitsOf(e.pd)),
+                                target: fmtQty(e.target, unitsOf(e.pd)),
+                              })
+                            : t("buy.noTarget"))
+               + (e.places.length ? " · " + e.places.join(", ") : ""),
     }));
     row.append(who);
     row.append(el("div", {
-      className: e.missing ? "need" : "meta",
-      textContent: e.missing ? "+" + fmtQty(e.missing, unitsOf(e.pd)) : t("buy.ok"),
+    className: e.missing ? "need" : "meta",
+    textContent: e.missing ? "+" + fmtQty(e.missing, unitsOf(e.pd)) : t("buy.ok"),
     }));
     row.onclick = () => openPart(e.pk, "buy");
     row.dataset.pk = String(e.pk);
@@ -3150,7 +3227,7 @@ function drawFab(entries) {
     // The count appears only while a search narrows the list — otherwise it would just repeat
     // the badge on the tab.
     textContent: (canShare ? t("buy.share") : t("buy.copy"))
-               + (BUY_QUERY ? " (" + fmtNum(entries.length) + ")" : ""),
+             + (BUY_QUERY ? " (" + fmtNum(entries.length) + ")" : ""),
   }));
   fab.onclick = () => (canShare ? shareList : copyList)(buyText(entries));
   fab.hidden = false;
@@ -3199,7 +3276,7 @@ const VIEW_KEY = "vorrat.view";
 function saveView(which, pk) {
   try {
     sessionStorage.setItem(VIEW_KEY, JSON.stringify({
-      view: which, pk: pk || null, from: DETAIL_FROM,
+    view: which, pk: pk || null, from: DETAIL_FROM,
     }));
   } catch (e) { /* private mode; the app just forgets */ }
 }
@@ -3279,43 +3356,37 @@ function drawNewRequirement() {
   unitSel.onchange = () => {
     targetInput.step = unitSel.value ? "0.25" : "1";
     if (targetLabel) {
-      targetLabel.textContent = unitSel.value
-        ? t("field.target") + " (" + unitLabel(unitSel.value) + ")" : t("field.target");
+    targetLabel.textContent = unitSel.value
+      ? t("field.target") + " (" + unitLabel(unitSel.value) + ")" : t("field.target");
     }
   };
 
   box.append(field(t("field.name"), name), field(t("field.category"), cat),
-             field(t("field.unit"), unitSel), targetField);
+           field(t("field.unit"), unitSel), targetField);
   box.append(el("div", { className: "hint", textContent: t("requirement.newHint") }));
 
   const row = el("div", { className: "buttons" });
   const ok = el("button", { className: "btn primary", textContent: t("common.create") });
   const no = el("button", { className: "btn ghost", textContent: t("common.cancel") });
   no.onclick = () => showTab(DETAIL_FROM);
-  ok.onclick = async () => {
-    if (!name.value.trim()) return toast(t("error.nameMissing"), true);
-    ok.disabled = true;
-    try {
-      const created = await api("/part/", {
-        method: "POST",
-        body: {
-          name: name.value.trim(), description: t("requirement.description"),
-          category: Number(cat.value),
-          is_template: true, purchaseable: true, active: true,
-          units: unitSel.value,
-          minimum_stock: unitSel.value ? roundTarget(targetInput.value)
-                                       : Number(targetInput.value || 0),
-        },
-      });
-      PARTS.set(created.pk, created);
-      toast(t("requirement.created"));
-      // Straight into the new requirement: the next thing you want is almost always to look at it.
-      openPart(created.pk, "buy");
-    } catch (e) {
-      toast(e.message, true);
-      ok.disabled = false;
-    }
-  };
+  ok.onclick = () => withBusy(ok, async () => {
+    if (!name.value.trim()) throw new Error(t("error.nameMissing"));
+    const created = await api("/part/", {
+      method: "POST",
+      body: {
+        name: name.value.trim(), description: t("requirement.description"),
+        category: Number(cat.value),
+        is_template: true, purchaseable: true, active: true,
+        units: unitSel.value,
+        minimum_stock: unitSel.value ? roundTarget(targetInput.value)
+                                     : Number(targetInput.value || 0),
+      },
+    });
+    PARTS.set(created.pk, created);
+    toast(t("requirement.created"));
+    // Straight into the new requirement: the next thing you want is almost always to look at it.
+    openPart(created.pk, "buy");
+  }, [no], true).catch((e) => toast(e.message, true));
   row.append(ok, no);
   box.append(row);
   name.focus();
@@ -3521,10 +3592,12 @@ async function startApp() {
   // It was called "camera" while it toggled the running camera. Now it only appears when the
   // camera is NOT running — then the button is an offer to try again.
   fill("#camBtn", "camera", t("scan.cameraOn"));
-  $("#go").onclick = () => lookup($("#ean").value);
+  // The search button carries the spinner however the lookup was started — by tap or by Enter.
+  const search = () => withBusy($("#go"), () => lookup($("#ean").value));
+  $("#go").onclick = search;
   $("#camBtn").onclick = startCam;
   $("#ean").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); lookup($("#ean").value); }
+    if (e.key === "Enter") { e.preventDefault(); search(); }
   });
 
   // boot() has already validated the token and filled ME; only the password path arrives here

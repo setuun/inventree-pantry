@@ -16,7 +16,6 @@
   "auth.username": "Имя пользователя",
   "auth.password": "Пароль",
   "auth.login": "Войти",
-  "auth.loggingIn": "Вход …",
   "auth.logout": "Выйти",
   "auth.missing": "Введите имя пользователя и пароль",
   "auth.failed": "Не удалось войти",

@@ -16,7 +16,6 @@
   "auth.username": "用户名",
   "auth.password": "密码",
   "auth.login": "登录",
-  "auth.loggingIn": "正在登录…",
   "auth.logout": "退出登录",
   "auth.missing": "请输入用户名和密码",
   "auth.failed": "登录失败",

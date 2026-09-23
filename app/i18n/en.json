@@ -16,7 +16,6 @@
   "auth.username": "Username",
   "auth.password": "Password",
   "auth.login": "Sign in",
-  "auth.loggingIn": "Signing in …",
   "auth.logout": "Sign out",
   "auth.missing": "Enter username and password",
   "auth.failed": "Sign-in failed",
