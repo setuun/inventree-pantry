@@ -120,11 +120,15 @@
   #who { color: var(--muted); font-size: 13px; }
   /* The language picker is a real <select>, laid invisibly over a small chip: the platform
      draws the list (and reads it out), the header only has to show two letters. */
+  /* `margin: 0` is not decoration: this is a <label>, and the shared label rule gives every
+     label a 4px bottom margin — which lifted the two letters visibly above the name and the
+     sign-out icon beside them. */
   .langpick {
     position: relative; display: inline-flex; align-items: center; justify-content: center;
-    min-width: 40px; height: 40px; color: var(--muted); font-size: 12px; font-weight: 700;
-    letter-spacing: .04em;
+    min-width: 40px; height: 40px; margin: 0; line-height: 1;
+    color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em;
   }
+  #who { line-height: 1; }
   .langpick select {
     position: absolute; inset: 0; opacity: 0; width: 100%; min-height: 0; padding: 0;
     cursor: pointer;
@@ -545,7 +549,7 @@
      location     ("Lagerort")  where it lies
    In InvenTree's own words a requirement is a template part and a variety is its variant. */
 
-const VERSION = "2.0.0";
+const VERSION = "2.0.1";
 
 // --- tiny helpers ------------------------------------------------------------
 const $ = (s) => document.querySelector(s);

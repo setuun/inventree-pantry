@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1 (2026-09-23)
+
+- Header: the language code sat a few pixels above the name and the sign-out icon (the
+  picker is a `<label>` and inherited the shared label margin). Everything in the header now
+  shares one centre line.
+
 ## 2.0.0 (2026-09-23): first public release
 
 - **Four languages**: German, English, Russian, Chinese. Every visible string moved into
