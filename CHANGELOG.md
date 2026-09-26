@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.0 (unreleased)
+
+- **Camera scanning on iPhones.** Safari has no native `BarcodeDetector`, so on an iPhone the
+  scan screen could only take typed barcodes. `tools/fetch-scanner.sh` fetches an optional
+  polyfill (ZXing-C++ as WebAssembly, the `barcode-detector` package, pinned by version and
+  sha512) into `app/vendor/`, and `tools/install.sh` copies it along. The page loads it from its
+  own origin, only when the scan screen opens on a browser without a native detector; its
+  WebAssembly comes from the same place, never from a CDN. Without the files nothing changes.
+
 ## 2.1.0 (2026-09-23)
 
 - **Loading states on every button that waits for the server**: sign-in, barcode search,

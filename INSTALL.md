@@ -71,7 +71,12 @@ to the person.
 
 ## Step 2: copy the files
 
+**ASK** whether anyone will scan with an iPhone. Safari has no native barcode scanner, so for
+iPhones fetch the optional one first (1.1 MB, pinned by checksum, served from InvenTree's own
+origin; docs/design.md explains why it is optional):
+
 ```sh
+tools/fetch-scanner.sh      # optional: camera scanning on iPhones
 sudo tools/install.sh <data-directory> pantry.json
 ```
 
@@ -80,7 +85,7 @@ This runs both checks, then copies the app to `<data-directory>/vorrat/` (with p
 like the data directory. It deletes nothing.
 
 Check: `ls <data-directory>/vorrat` shows `index.html`, `config.json`, `i18n/`, four
-`manifest.*.webmanifest`; `ls <data-directory>/plugins` shows `openfoodfacts_barcode.py` and
+`manifest.*.webmanifest` (and `vendor/` if you fetched the scanner); `ls <data-directory>/plugins` shows `openfoodfacts_barcode.py` and
 `pantry.json`.
 
 ## Step 3: route /vorrat/ (CONFIRM before restarting)
@@ -192,7 +197,8 @@ cannot reach `world.openfoodfacts.org`.
 
 ## Step 7: phones
 
-On each phone (Chrome on Android recommended, it has the native barcode scanner): open
+On each phone (Chrome on Android has a native barcode scanner; iPhones scan with the optional
+scanner from step 2, otherwise they take typed barcodes): open
 `https://<host>/vorrat/`, sign in once, then browser menu → *Add to home screen*. The app
 follows the phone's language; the two letters in the header switch it.
 

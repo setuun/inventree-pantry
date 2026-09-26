@@ -24,10 +24,20 @@ every CORS preflight and every `CORS_ALLOWED_ORIGINS` entry, and it lets the pag
 existing `/web/` session for an API token without the user typing anything. Any other origin
 reintroduces CORS *and* a token to save nothing. The cost is one route and one read-only mount.
 
-**No build step, no framework, no CDN, no polyfill.** InvenTree's proxy often has no outbound
-internet in the serving path, and a household app should still open in ten years. Scanning uses
-the browser's native `BarcodeDetector` (Chrome on Android); where it is missing, the page says
-so and takes a typed barcode.
+**No build step, no framework, no CDN.** InvenTree's proxy often has no outbound internet in
+the serving path, and a household app should still open in ten years. Scanning uses the
+browser's native `BarcodeDetector` (Chrome on Android); where it is missing, the page says so and
+takes a typed barcode.
+
+**One optional polyfill, on the same terms.** Safari has no `BarcodeDetector`, and every browser
+on an iPhone is Safari underneath, so a household of iPhones could only type. `tools/fetch-scanner.sh`
+puts a polyfill into `app/vendor/`: ZXing-C++ compiled to WebAssembly (the `barcode-detector`
+package), pinned by version and checksum. It keeps every rule above: it is served from InvenTree's
+own origin like the page (never a CDN; the polyfill's default of fetching its `.wasm` from
+jsDelivr is overridden), it needs no build, and it is loaded lazily, only when the scan screen
+opens on a browser without a native detector, so a phone that has one never downloads it.
+Without the files the page behaves exactly as before. It is opt-in because it is 1.1 MB of
+someone else's binary, not because it is risky to leave out.
 
 **It is a front end, not a second source of truth.** It holds no state beyond the session and
 every action is one documented API call. `/vorrat/` itself is readable without signing in, which
