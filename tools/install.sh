@@ -7,7 +7,8 @@
 # INVENTREE_EXT_VOLUME — the one that already holds static/, media/ and plugins/. This script:
 #
 #   1. runs both checks (app and config) and stops if either fails
-#   2. puts the app into <dir>/vorrat/, with your pantry.json as vorrat/config.json
+#   2. puts the app into <dir>/vorrat/, with your pantry.json as vorrat/config.json (and
+#      app/vendor/, the optional iPhone scanner from tools/fetch-scanner.sh, if present)
 #   3. puts the Open Food Facts plugin and the same pantry.json into <dir>/plugins/
 #   4. gives everything the owner of <dir>, so the container (uid 1000 upstream) can read it
 #
@@ -36,6 +37,11 @@ OWNER=$(stat -c '%u:%g' "$DATA")
 mkdir -p "$DATA/vorrat/i18n" "$DATA/plugins"
 cp "$HERE"/app/index.html "$HERE"/app/icon.svg "$HERE"/app/manifest.*.webmanifest "$DATA/vorrat/"
 cp "$HERE"/app/i18n/*.json "$DATA/vorrat/i18n/"
+# Optional: the camera scanner for iPhones, from tools/fetch-scanner.sh.
+if [ -d "$HERE/app/vendor" ]; then
+  mkdir -p "$DATA/vorrat/vendor"
+  cp "$HERE"/app/vendor/* "$DATA/vorrat/vendor/"
+fi
 cp "$CONFIG" "$DATA/vorrat/config.json"
 cp "$HERE/plugin/openfoodfacts_barcode.py" "$DATA/plugins/"
 cp "$CONFIG" "$DATA/plugins/pantry.json"

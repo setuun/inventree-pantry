@@ -595,7 +595,7 @@
      location     ("Lagerort")  where it lies
    In InvenTree's own words a requirement is a template part and a variety is its variant. */
 
-const VERSION = "2.1.0";
+const VERSION = "2.2.0";
 
 // --- tiny helpers ------------------------------------------------------------
 const $ = (s) => document.querySelector(s);
@@ -2653,11 +2653,12 @@ function stopCam() {
    "camera" would then be switching the running camera off.
 
    Hidden outright where there is no barcode detector: switching on a camera that cannot read
-   anything is not a retry, it is a light. */
+   anything is not a retry, it is a light. "No detector" is only known once loadScanner() has
+   tried, which the scan tab does by itself on opening. */
 function updateCamBtn() {
   const btn = $("#camBtn");
   if (!btn) return;
-  const possible = typeof window !== "undefined" && "BarcodeDetector" in window;
+  const possible = !scannerMissing;
   btn.hidden = !!stream || !possible;
   // The row is a two-column grid; with one button gone the other should take the width
   // rather than leave a hole.
@@ -2665,14 +2666,57 @@ function updateCamBtn() {
   if (row) row.classList.toggle("solo", btn.hidden);
 }
 
+/* BarcodeDetector is native in Chrome on Android, and missing in Safari, so on every iPhone
+   browser (they are all WebKit), and in desktop Chromium on Linux. Nothing is fetched from a
+   CDN: this page is often served from an internal host that cannot reach one. Instead,
+   tools/fetch-scanner.sh can put a polyfill into vendor/ (ZXing-C++ compiled to WebAssembly,
+   the barcode-detector package, pinned by checksum), and it is loaded from this origin, the
+   first time the scanner is needed and only where no native detector exists, so a phone that
+   has one never downloads it. Without those files nothing changes: typing an EAN is the
+   fallback, as before. */
+let scannerLoad = null;
+let scannerMissing = false;
+function loadScanner() {
+  if ("BarcodeDetector" in window) return Promise.resolve(true);
+  if (!scannerLoad) {
+    scannerLoad = new Promise((resolve) => {
+      const s = document.createElement("script");
+      s.src = "vendor/barcode-detector.js";
+      s.onload = () => {
+        const api = window.BarcodeDetectionAPI;
+        // A missing file can still "load": the web server's catch-all answers with
+        // index.html (deploy/Caddyfile.snippet's try_files), which runs as a syntax error.
+        if (!("BarcodeDetector" in window) || !api || !api.prepareZXingModule) {
+          resolve(false);
+          return;
+        }
+        // The polyfill fetches its .wasm from jsDelivr unless told otherwise.
+        api.prepareZXingModule({
+          overrides: {
+            locateFile: (path, prefix) =>
+              path.endsWith(".wasm") ? new URL("vendor/" + path, document.baseURI).href : prefix + path,
+          },
+        });
+        resolve(true);
+      };
+      s.onerror = () => resolve(false);
+      document.head.appendChild(s);
+    });
+  }
+  return scannerLoad;
+}
+
 async function startCam() {
   if (stream) return;
-  // BarcodeDetector is the native one (Chrome/Android). No polyfill is loaded on purpose:
-  // this page is served from an internal host with no CDN reachable, and typing an EAN is a
-  // perfectly good fallback for the handful of browsers without it.
-  if (!("BarcodeDetector" in window)) {
+  const haveDetector = await loadScanner();
+  scannerMissing = !haveDetector;
+  // The first load takes a moment on a phone; whoever left the scan screen meanwhile must
+  // not come back to a camera that switched itself on behind another tab.
+  if ($("#view-scan").hidden) return;
+  if (!haveDetector) {
     $("#camHint").hidden = false;
     $("#camHint").textContent = t("scan.noDetector");
+    updateCamBtn();
     return;
   }
   try {

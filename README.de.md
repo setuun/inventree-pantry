@@ -65,7 +65,8 @@ Nur die App ist Pflicht, der Rest ist optional.
 - **Einkaufsliste** mit allem unter Soll, über das Teilen-Menü des Handys verschickbar.
 - **Läuft ab**, mit einer Vorwarnzeit, die sich nach der Haltbarkeit richtet: wenige Tage
   bei Frischmilch, drei Monate bei Konserven.
-- **Scannen** mit der Handykamera (Chrome auf Android, sonst Barcode eintippen). Ein
+- **Scannen** mit der Handykamera: in Chrome auf Android von Haus aus, auf dem iPhone (Safari)
+  mit dem optionalen Scanner aus `tools/fetch-scanner.sh`; ohne ihn Barcode eintippen. Ein
   unbekannter Barcode wird in einem Schritt zum neuen Produkt.
 - **Fotos** aus Kamera oder Galerie, vor dem Hochladen verkleinert und gerade gedreht.
 - **Einmal anmelden pro Gerät**, danach ein Jahr Ruhe (ein Token pro Gerät, in InvenTree
@@ -127,4 +128,7 @@ Plugin nachschlägt, stammen von [Open Food Facts](https://de.openfoodfacts.org)
 der [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/), Produktfotos unter
 [CC BY-SA](https://creativecommons.org/licenses/by-sa/3.0/deed.de). Wer damit aufgebaute Daten
 veröffentlicht, nennt Open Food Facts entsprechend. Die Icons sind Pfade aus den
-[Material Design Icons](https://fonts.google.com/icons) (Apache 2.0).
+[Material Design Icons](https://fonts.google.com/icons) (Apache 2.0). Der optionale iPhone-Scanner,
+den `tools/fetch-scanner.sh` holt, ist [barcode-detector](https://github.com/Sec-ant/barcode-detector)
+und [zxing-wasm](https://github.com/Sec-ant/zxing-wasm) (MIT) auf Basis von
+[ZXing-C++](https://github.com/zxing-cpp/zxing-cpp) (Apache 2.0); er ist nicht Teil dieses Repositorys.
