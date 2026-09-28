@@ -28,7 +28,8 @@ want to depend on, and returning a wrong Part is far worse than doing nothing.
 WHAT IT DOES
 1. Ignores anything that is not a valid GTIN-8/12/13/14 (checksum verified). A mis-scan or a
    random QR code must never reach the network or create a Part.
-2. Asks Open Food Facts for the product name.
+2. Asks Open Food Facts for the product name, and with it the sister databases for cosmetics
+   and household goods (see SOURCES and `_lookup`).
 3. Creates a Part in the configured category, links the barcode to it, and returns it — so the
    scan that discovers the product also files it. Every later scan is then a pure local hit.
 
@@ -74,7 +75,19 @@ from stock.models import StockLocation
 
 logger = structlog.get_logger('inventree')
 
-PLUGIN_VERSION = '2.0.0'
+PLUGIN_VERSION = '2.1.0'
+
+# Open Food Facts has three sister databases on the same software: Open Beauty Facts (cosmetics
+# and hygiene), Open Products Facts (everything else, household goods included) and Open Pet Food
+# Facts. Each product carries a `product_type` saying which one it lives in; a product without
+# one is food. The name is what the scan reports, so the credit goes to the database that
+# actually knew the product.
+SOURCES = {
+    'food': 'Open Food Facts',
+    'beauty': 'Open Beauty Facts',
+    'product': 'Open Products Facts',
+    'petfood': 'Open Pet Food Facts',
+}
 
 
 def load_config() -> dict:
@@ -108,6 +121,7 @@ def off_config() -> dict:
     off = cfg.get('openfoodfacts') or {}
     return {
         'category_map': off.get('category_map') or [],
+        'product_type_category': off.get('product_type_category') or {},
         'label_keywords': off.get('label_keywords') or {},
         'keywords': off.get('keywords') or [],
         # Used only when the matched category has no default_location of its own.
@@ -195,6 +209,11 @@ def fetch_product_image(part_pk: int, url: str, code: str) -> bool:
     return True
 
 
+def product_type(product: dict) -> str:
+    """Which database a product belongs to. Missing means food, as it was before the field."""
+    return product.get('product_type') or 'food'
+
+
 def gtin_is_valid(code: str) -> bool:
     """True if `code` is a syntactically valid GTIN-8/12/13/14 (check digit verified).
 
@@ -220,8 +239,8 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
     SLUG = 'openfoodfacts-barcode'
     TITLE = _('Open Food Facts barcode lookup')
     DESCRIPTION = _(
-        'Look up unknown grocery barcodes in the Open Food Facts database and optionally '
-        'create the matching part automatically.'
+        'Look up unknown barcodes in Open Food Facts and its sister databases (Open Beauty '
+        'Facts, Open Products Facts) and optionally create the matching part automatically.'
     )
     VERSION = PLUGIN_VERSION
     AUTHOR = 'inventree-pantry'
@@ -284,10 +303,16 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
             'labels_tags',
             'image_front_url',
             'image_url',
+            'product_type',
         ])
+        # API v3 with product_type=all asks all four databases at once: Open Food Facts answers
+        # a barcode that lives in a sister database with a 302 to that database, and urllib
+        # follows it with the same headers. Checked 2026-09-28: Octenisept (4032651214112)
+        # comes back from Open Products Facts this way; API v2 only says "product found with a
+        # different product type" and returns nothing.
         url = (
-            'https://world.openfoodfacts.org/api/v2/product/'
-            f'{urllib.parse.quote(code)}.json?fields={urllib.parse.quote(fields)}'
+            'https://world.openfoodfacts.org/api/v3/product/'
+            f'{urllib.parse.quote(code)}?product_type=all&fields={urllib.parse.quote(fields)}'
         )
 
         req = urllib.request.Request(url, headers={'User-Agent': user_agent(contact)})
@@ -295,7 +320,12 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 payload = json.load(resp)
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
+        except urllib.error.HTTPError as exc:
+            # v3 answers an unknown barcode with a 404, which is an answer, not a failure.
+            if exc.code != 404:
+                logger.warning('OFF lookup failed for %s: %s', code, exc)
+            return None
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             # A lookup failure is NOT an error for the scan as a whole: returning None just
             # means "I have nothing to add", and InvenTree reports the barcode as unknown as
             # it would have anyway. Never raise — an exception here would surface to the user
@@ -303,8 +333,9 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
             logger.warning('OFF lookup failed for %s: %s', code, exc)
             return None
 
-        # status 1 = found, 0 = not in the database.
-        if payload.get('status') != 1:
+        # v3 says "success" or "success_with_warnings" (e.g. the code was normalised to 13
+        # digits); anything else is not a product.
+        if payload.get('status') not in ('success', 'success_with_warnings'):
             return None
 
         return payload.get('product') or None
@@ -376,8 +407,15 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
         except Exception as exc:                      # never fail a scan over a nice-to-have
             logger.warning('OFF plugin could not store pack content for %s: %s', part.pk, exc)
 
-    def _map_category(self, product: dict, category_map: list) -> str | None:
+    def _map_category(self, product: dict, cfg: dict) -> str | None:
         """Pick one of our category names from OFF's `categories_tags`. None if nothing fits.
+
+        An entry applies only to the product types it names (`product_types`, default food).
+        The tokens are substrings, and the sister databases reuse food words for other things:
+        `body-creams` contains "creams", `body-oils` contains "oils". Without the type check a
+        hand cream would be filed under dairy. A product nothing matched falls back to its
+        type's category (`product_type_category`), so a shampoo lands in hygiene rather than
+        in the food fallback of the CATEGORY setting.
 
         OFF returns its tags broad -> narrow (`en:plant-based-foods` long before
         `en:canned-vegetables`). We walk them NARROW-FIRST, so the most specific statement OFF
@@ -385,14 +423,16 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
         breaks the tie. That ordering is the whole reason canned fish lands in the fish group
         rather than in "other food".
         """
+        ptype = product_type(product)
+        entries = [e for e in cfg['category_map'] if ptype in (e.get('product_types') or ['food'])]
         for tag in reversed(product.get('categories_tags') or []):
             bare = tag.split(':', 1)[-1]
-            for entry in category_map:
+            for entry in entries:
                 for token in entry.get('tokens') or []:
                     if token in bare:
                         return entry['category']
 
-        return None
+        return cfg['product_type_category'].get(ptype)
 
     def _build_keywords(self, product: dict, cfg: dict) -> str:
         """The configured base keywords plus any OFF label we have a word for."""
@@ -439,6 +479,7 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
             return None
 
         name, description = self._build_name(product)
+        source = SOURCES.get(product_type(product), SOURCES['food'])
 
         if not name:
             # Open Food Facts has the barcode but no usable name (a stub entry). Nothing to
@@ -448,12 +489,13 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
         if not self.get_setting('AUTO_CREATE'):
             # Report-only mode: no database write. 'success' is what the UI surfaces.
             return {
-                'success': _('Open Food Facts: {name}').format(name=name),
+                'success': _('{source}: {name}').format(source=source, name=name),
                 'openfoodfacts': {
                     'name': name,
                     'description': description,
                     'barcode': code,
-                    'category': self._map_category(product, cfg['category_map']),
+                    'category': self._map_category(product, cfg),
+                    'product_type': product_type(product),
                 },
             }
 
@@ -461,7 +503,7 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
         # setting must point at a LEAF ("other food"), not at a structural parent ("food"),
         # because a structural category refuses to hold parts at all.
         category = None
-        mapped = self._map_category(product, cfg['category_map'])
+        mapped = self._map_category(product, cfg)
 
         if mapped:
             category = PartCategory.objects.filter(name=mapped, structural=False).first()
@@ -514,9 +556,10 @@ class OpenFoodFactsBarcodePlugin(SettingsMixin, BarcodeMixin, InvenTreePlugin):
         self._store_pack_content(part, (product.get('quantity') or '').strip(),
                                  cfg['pack_parameter'])
 
-        logger.info('OFF plugin created part %s (%s) from barcode %s', part.pk, name, code)
+        logger.info('OFF plugin created part %s (%s) from barcode %s via %s',
+                    part.pk, name, code, source)
 
         return {
             **{Part.barcode_model_type(): part.format_matched_response(user=user)},
-            'success': _('Created "{name}" from Open Food Facts').format(name=name),
+            'success': _('Created "{name}" from {source}').format(name=name, source=source),
         }

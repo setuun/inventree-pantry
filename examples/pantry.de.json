@@ -245,7 +245,40 @@
           "desserts",
           "canned-foods"
         ]
+      },
+      {
+        "category": "Medizin & Erste Hilfe",
+        "product_types": [
+          "beauty",
+          "product"
+        ],
+        "tokens": [
+          "medic",
+          "first-aid",
+          "bandage",
+          "plaster",
+          "disinfect",
+          "antiseptic",
+          "vitamins-supplements"
+        ]
+      },
+      {
+        "category": "Licht & Energie",
+        "product_types": [
+          "beauty",
+          "product"
+        ],
+        "tokens": [
+          "batteries",
+          "flashlights",
+          "light-bulbs",
+          "candles"
+        ]
       }
-    ]
+    ],
+    "product_type_category": {
+      "beauty": "Haushalt & Hygiene",
+      "product": "Haushalt & Hygiene"
+    }
   }
 }

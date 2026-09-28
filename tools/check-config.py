@@ -21,6 +21,10 @@ import sys
 LANGUAGES_WITH_TEXT = {'de', 'en', 'ru', 'zh'}   # expiry-check.py has messages for these
 
 
+# The databases behind Open Food Facts' product_type (the plugin's SOURCES).
+PRODUCT_TYPES = ('food', 'beauty', 'product', 'petfood')
+
+
 def check(path):
     problems, warnings = [], []
     try:
@@ -77,6 +81,19 @@ def check(path):
                             'cannot hold parts')
         if not entry.get('tokens'):
             problems.append(f'openfoodfacts.category_map: {target!r} has no tokens')
+        for ptype in entry.get('product_types') or []:
+            if ptype not in PRODUCT_TYPES:
+                problems.append(f'openfoodfacts.category_map: {target!r} names product type '
+                                f'{ptype!r} (known: {", ".join(PRODUCT_TYPES)})')
+    for ptype, target in (off.get('product_type_category') or {}).items():
+        if ptype not in PRODUCT_TYPES:
+            problems.append(f'openfoodfacts.product_type_category: {ptype!r} is not a product '
+                            f'type (known: {", ".join(PRODUCT_TYPES)})')
+        if target not in cat_names:
+            problems.append(f'openfoodfacts.product_type_category: {target!r} is not a category')
+        elif target in structural:
+            problems.append(f'openfoodfacts.product_type_category: {target!r} is structural and '
+                            'cannot hold parts')
     fallback = off.get('fallback_location')
     if fallback and fallback not in loc_names:
         problems.append(f'openfoodfacts.fallback_location {fallback!r} is not a location')

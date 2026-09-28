@@ -45,7 +45,7 @@ Nichts davon bringt InvenTree mit. Alles hier liegt in diesem Repository:
 | Teil | Was er tut | Wo |
 |---|---|---|
 | **Die App** | Eine statische Seite (HTML + JavaScript, kein Build, kein CDN), ausgeliefert von InvenTrees eigenem Webserver unter `/vorrat/`. Lässt sich auf den Startbildschirm legen. | `app/` |
-| **Open-Food-Facts-Plugin** | Ein InvenTree-Plugin. Einen noch unbekannten Barcode schlägt es bei Open Food Facts nach und legt das Produkt mit Kategorie, Schlagworten, MHD-Vorgabe, Packungsgröße und Foto an, der Barcode wird verknüpft. | `plugin/` |
+| **Open-Food-Facts-Plugin** | Ein InvenTree-Plugin. Einen noch unbekannten Barcode schlägt es bei Open Food Facts und den Schwester-Datenbanken für Kosmetik und Haushaltswaren nach (Open Beauty Facts, Open Products Facts) und legt das Produkt mit Kategorie, Schlagworten, MHD-Vorgabe, Packungsgröße und Foto an, der Barcode wird verknüpft. | `plugin/` |
 | **Taxonomie-Skript** | Legt Kategorien, Lagerorte und den Packungsinhalt-Parameter aus `pantry.json` an. Beliebig oft ausführbar, löscht nie. | `tools/sync-taxonomy.py` |
 | **Ablauf-Wächter** | Meldet täglich „3 abgelaufen, 2 bald“ an [ntfy](https://ntfy.sh) und/oder einen Matrix-Raum. | `tools/expiry-check.py`, `deploy/` |
 | **Beispielkonfiguration** | Eine Start-Taxonomie für Vorrat und Krisenvorrat (BBK-Lebensmittelgruppen), in vier Sprachen. | `examples/pantry.*.json` |
@@ -124,10 +124,12 @@ MIT, siehe [LICENSE](LICENSE).
 
 Ein unabhängiges Projekt, weder mit InvenTree noch mit Open Food Facts verbunden.
 [InvenTree](https://github.com/inventree/InvenTree) steht unter MIT. Die Produktdaten, die das
-Plugin nachschlägt, stammen von [Open Food Facts](https://de.openfoodfacts.org) und stehen unter
+Plugin nachschlägt, stammen von [Open Food Facts](https://de.openfoodfacts.org),
+[Open Beauty Facts](https://de.openbeautyfacts.org) und
+[Open Products Facts](https://de.openproductsfacts.org) und stehen unter
 der [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/), Produktfotos unter
 [CC BY-SA](https://creativecommons.org/licenses/by-sa/3.0/deed.de). Wer damit aufgebaute Daten
-veröffentlicht, nennt Open Food Facts entsprechend. Die Icons sind Pfade aus den
+veröffentlicht, nennt die jeweilige Datenbank entsprechend. Die Icons sind Pfade aus den
 [Material Design Icons](https://fonts.google.com/icons) (Apache 2.0). Der optionale iPhone-Scanner,
 den `tools/fetch-scanner.sh` holt, ist [barcode-detector](https://github.com/Sec-ant/barcode-detector)
 und [zxing-wasm](https://github.com/Sec-ant/zxing-wasm) (MIT) auf Basis von

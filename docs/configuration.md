@@ -76,7 +76,8 @@ A list; each entry is an InvenTree part category. Same rules as locations.
 | `fallback_location` | `""` | Location for a scanned product whose category has no `default_location`. Also the app's last-resort shelf. |
 | `keywords` | `[]` | Keywords added to *every* part the plugin creates. |
 | `label_keywords` | `{}` | Open Food Facts label → keyword, e.g. `"organic": "bio"`. Labels are OFF's tag names without the language prefix. |
-| `category_map` | `[]` | Ordered list of `{"category": <name>, "tokens": [..]}`, see below. |
+| `category_map` | `[]` | Ordered list of `{"category": <name>, "tokens": [..], "product_types": [..]}`, see below. |
+| `product_type_category` | `{}` | Product type → category for a product `category_map` did not place, e.g. `{"beauty": "Household & hygiene", "product": "Household & hygiene"}`. Unset types go to the plugin's `CATEGORY` setting. |
 | `image_timeout` | `20` | Seconds for downloading the product photo (runs on InvenTree's worker, never delays a scan). |
 | `image_max_kb` | `2048` | Photos larger than this are dropped, not truncated. |
 
@@ -87,6 +88,16 @@ substring of the tag without its language prefix (`en:canned-vegetables` → `ca
 contains `vegetables`). The first hit wins. **Order is behaviour**: OFF files butter under both
 `dairies` and `fats`, so whichever entry stands higher decides. Tokens are OFF's English tag
 vocabulary in every language. Do not translate them.
+
+**Product types.** The plugin asks Open Food Facts *and* its sister databases in one request:
+Open Beauty Facts (`beauty`: cosmetics, hygiene), Open Products Facts (`product`: household
+goods, batteries, medicine, everything else) and Open Pet Food Facts (`petfood`). Each product
+says which one it comes from. An entry in `category_map` applies only to the types in its
+`product_types`, and **without that key only to `food`**. This is not optional tidiness: the
+tokens are substrings, and the other databases reuse food words (`body-creams` contains
+`creams`, `body-oils` contains `oils`), so a food map applied to a hand cream files it under
+dairy. Their vocabulary is different anyway (`shampoos`, `toothpastes`, `batteries`,
+`medicine`, `household-cleaning-supplies`); the examples carry a starter set.
 
 The plugin's own settings in InvenTree (Admin → Plugins → Open Food Facts barcode lookup):
 `AUTO_CREATE` (create parts, or only report the name), `CATEGORY` (the fallback category for

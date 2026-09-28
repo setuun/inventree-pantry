@@ -245,7 +245,40 @@
           "desserts",
           "canned-foods"
         ]
+      },
+      {
+        "category": "药品与急救",
+        "product_types": [
+          "beauty",
+          "product"
+        ],
+        "tokens": [
+          "medic",
+          "first-aid",
+          "bandage",
+          "plaster",
+          "disinfect",
+          "antiseptic",
+          "vitamins-supplements"
+        ]
+      },
+      {
+        "category": "照明与能源",
+        "product_types": [
+          "beauty",
+          "product"
+        ],
+        "tokens": [
+          "batteries",
+          "flashlights",
+          "light-bulbs",
+          "candles"
+        ]
       }
-    ]
+    ],
+    "product_type_category": {
+      "beauty": "家居与卫生",
+      "product": "家居与卫生"
+    }
   }
 }

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.0 (unreleased)
+
+- **Scanning finds cosmetics and household goods, too.** The Open Food Facts plugin (2.1.0) now
+  asks Open Food Facts and its sister databases in one request (API v3, `product_type=all`):
+  Open Beauty Facts for shampoo, toothpaste and the like, Open Products Facts for cleaning
+  agents, batteries, medicine and other household goods. The scan says which database knew the
+  product.
+- **Category mapping by product type.** `category_map` entries take an optional
+  `product_types`; without it they apply to food only, so a hand cream no longer lands in dairy
+  because its tag contains "creams". New key `product_type_category` files a product the map did
+  not place by its type (hygiene, for instance). The examples map medicine and batteries and
+  send everything else non-food to household & hygiene. `check-config.py` checks both keys.
+- Configurations without the new keys behave as before for food; a non-food product then goes
+  to the plugin's `CATEGORY` fallback.
+
 ## 2.3.0 (2026-09-28)
 
 - **Batches of measured products in packets, too.** Editing a batch of something measured in
