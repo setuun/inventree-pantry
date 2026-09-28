@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.4.0 (unreleased)
+## 2.4.0 (2026-09-28)
 
 - **Scanning finds cosmetics and household goods, too.** The Open Food Facts plugin (2.1.0) now
   asks Open Food Facts and its sister databases in one request (API v3, `product_type=all`):
