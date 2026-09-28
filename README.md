@@ -61,7 +61,8 @@ Only the app is required; the other parts are optional.
 - **Shopping list** of everything below target, shareable through the phone's share sheet.
 - **Expiring soon**, with a warning window that scales with shelf life: a few days for
   fresh milk, three months for tins.
-- **Scanning** with the phone camera (Chrome on Android; elsewhere type the barcode in). An
+- **Scanning** with the phone camera: natively in Chrome on Android, and on iPhones (Safari)
+  with the optional scanner from `tools/fetch-scanner.sh`; without it, type the barcode in. An
   unknown barcode becomes a new product in one step.
 - **Photos** from the camera or the gallery, shrunk and straightened before upload.
 - **One login per device**, then a year of silence (a per-device API token that can be
@@ -123,4 +124,7 @@ the plugin comes from [Open Food Facts](https://world.openfoodfacts.org), availa
 [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/); product photos are
 under [CC BY-SA](https://creativecommons.org/licenses/by-sa/3.0/). If you publish data you
 built with it, attribute Open Food Facts accordingly. The icons are paths from
-[Material Design Icons](https://fonts.google.com/icons) (Apache 2.0).
+[Material Design Icons](https://fonts.google.com/icons) (Apache 2.0). The optional iPhone scanner
+fetched by `tools/fetch-scanner.sh` is [barcode-detector](https://github.com/Sec-ant/barcode-detector)
+and [zxing-wasm](https://github.com/Sec-ant/zxing-wasm) (MIT), built on
+[ZXing-C++](https://github.com/zxing-cpp/zxing-cpp) (Apache 2.0); it is not part of this repository.
