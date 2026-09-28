@@ -595,7 +595,7 @@
      location     ("Lagerort")  where it lies
    In InvenTree's own words a requirement is a template part and a variety is its variant. */
 
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 
 // --- tiny helpers ------------------------------------------------------------
 const $ = (s) => document.querySelector(s);
@@ -2301,6 +2301,53 @@ function panelBatch(host, part, item, after) {
     const qty = qtyControl(part, item.quantity, item.quantity);
     const loc = locSelect(item.location);
     const mhd = dateField(t("field.bestBefore"), item.expiry_date || "");
+
+    /* Measured products are counted in packets on the shelf, but stored in kilograms, so the
+       batch shows both and keeps them in step: packets × content = amount. Typing packets or
+       the content recomputes the amount; typing the amount recomputes the packets. Only the
+       amount is saved as stock — a batch in InvenTree has one quantity, and the packet count
+       is derived, not stored. A corrected content goes to the product like it does when
+       booking in, which is where it is usually wrong (Open Food Facts on bulk packs). */
+    const u = unitsOf(part);
+    let content = null;
+    if (u && !part.is_template) {
+    /* The same 1..100 dropdown as booking in. An amount that is not a whole number of packets
+       (6.5 kg of 1-kg packets) gets its own option on top, like qtySelect does for `current`,
+       and "–" stands for "unknown" while the content is missing — a dropdown always has a
+       value, and without that option a content typed later would overwrite the amount with
+       whatever the list happened to show. */
+    const packets = qtySelect(null, 1);
+    packets.prepend(el("option", { value: "", textContent: "–" }));
+    const setPackets = (n) => {
+      for (const o of [...packets.options]) if (o.dataset.odd) o.remove();
+      if (n !== "" && !(Number.isInteger(n) && n >= 1 && n <= 100)) {
+        const o = el("option", { value: String(n), textContent: fmtNum(n) });
+        o.dataset.odd = "1";
+        packets.options[0].after(o);
+      }
+      packets.value = String(n);
+    };
+    content = el("input", { type: "number", step: "0.001", min: "0" });
+    const known = packOf(part);
+    if (known != null) content.value = String(known);
+    const round = (x, places) => Math.round(x * 10 ** places) / 10 ** places;
+    const fromAmount = () => {
+      const c = Number(content.value);
+      setPackets(c > 0 ? round(Number(qty.value) / c, 2) : "");
+    };
+    const toAmount = () => {
+      const c = Number(content.value);
+      if (c > 0 && packets.value !== "") qty.value = String(round(Number(packets.value) * c, 3));
+    };
+    packets.onchange = toAmount;
+    qty.oninput = fromAmount;
+    // The packets are what somebody counted on the shelf, so a corrected content keeps them and
+    // changes the amount; with no packets yet (content was unknown) they come from the amount.
+    content.oninput = () => { if (packets.value === "") fromAmount(); else toAmount(); };
+    fromAmount();
+    p.append(field(t("field.packets"), packets),
+             field(t("field.packContent") + " (" + unitLabel(u) + ")", content));
+    }
     p.append(field(qtyLabel(part, t("field.quantity")), qty), field(t("field.location"), loc), mhd.wrap);
 
     panelButtons(p, t("common.save"), async () => {
@@ -2325,6 +2372,7 @@ function panelBatch(host, part, item, after) {
         method: "PATCH", body: { expiry_date: mhd.input.value || null },
       });
     }
+    if (content) await savePack(part, Number(content.value));
     toast(t("common.saved"));
     after();
     });

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.0 (unreleased)
+
+- **Batches of measured products in packets, too.** Editing a batch of something measured in
+  kilograms or litres now shows packets (the same 1–100 list as booking in) and content per
+  packet next to the amount, and keeps
+  the three in step: change the packets or the content and the amount follows, change the
+  amount and the packets follow. The amount is what is saved; a corrected content per packet
+  is stored on the product, as when booking in. Counted articles are unchanged.
+
 ## 2.2.0 (2026-09-28)
 
 - **Camera scanning on iPhones.** Safari has no native `BarcodeDetector`, so on an iPhone the

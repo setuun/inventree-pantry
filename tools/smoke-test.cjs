@@ -291,6 +291,36 @@ async function walk(browser, lang, base) {
   await step("requirement", () => tap('#buylist [data-pk="10"]'));
   await step("book-measured", () => tap('#detail .buyrow'));
   await step("book-measured-form", () => tap("#detail .actions .btn.primary"));
+  // Packets, content and amount of a measured batch follow each other, and saving writes the
+  // amount plus the corrected content. Batch 100: 2 kg of a product with 1 kg per packet.
+  await step("batch-edit-measured", async () => {
+    await tap('#detail ul.stock li:first-child button[title]');
+    const packets = page.locator("#detail .panel select").first();
+    const [content, amount] = await page.locator("#detail .panel input[type=number]").all();
+    const expect = async (what, loc, want) => {
+      const got = await loc.inputValue();
+      if (Number(got) !== want) throw new Error(what + ": expected " + want + ", got " + got);
+    };
+    await expect("packets from the stored amount", packets, 2);
+    const options = await packets.locator("option").count();
+    if (options < 101) throw new Error("packets dropdown has only " + options + " options");
+    await packets.selectOption("3");
+    await expect("amount from packets", amount, 3);
+    await amount.fill("1.5");
+    await expect("packets from amount", packets, 1.5);
+    await content.fill("0.5");
+    await expect("amount from corrected content", amount, 0.75);
+    await shot("batch-edit-measured-form");
+    WRITES = [];
+    await page.locator("#detail .panel .buttons .btn.primary").click();
+    // The writes go out one after the other against a slow fake; wait for them, not for the
+    // spinner (which only shows after 150 ms, so its absence proves nothing at first).
+    const want = ["POST /api/stock/count/", "PATCH /api/parameter/1/"];
+    for (let i = 0; i < 40 && !want.every((w) => WRITES.includes(w)); i++) await page.waitForTimeout(100);
+    for (const w of want) {
+      if (!WRITES.includes(w)) throw new Error("missing " + w + ": " + WRITES.join(", "));
+    }
+  });
   await step("buy-all", async () => { await tap("#tab-buy"); await tap("#buycontrols .btn:first-child"); });
   await step("new-requirement", () => tap("#buycontrols .btn:nth-child(2)"));
   await step("expiry", () => tap("#tab-expiry"));
