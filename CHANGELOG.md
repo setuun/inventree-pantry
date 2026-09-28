@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.3.0 (unreleased)
+## 2.3.0 (2026-09-28)
 
 - **Batches of measured products in packets, too.** Editing a batch of something measured in
   kilograms or litres now shows packets (the same 1–100 list as booking in) and content per
