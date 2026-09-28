@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.2.0 (unreleased)
+## 2.2.0 (2026-09-28)
 
 - **Camera scanning on iPhones.** Safari has no native `BarcodeDetector`, so on an iPhone the
   scan screen could only take typed barcodes. `tools/fetch-scanner.sh` fetches an optional
